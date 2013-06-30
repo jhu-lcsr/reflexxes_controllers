@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package>
+  <name>reflexxes_controllers</name>
+  <version>0.0.0</version>
+  <description>The reflexxes_controllers package</description>
+
+  <maintainer email="jbo@jhu.edu">Jonathan Bohren</maintainer>
+
+  <license>LGPL</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+
+  <!-- The export tag contains other, unspecified, tags -->
+  <export>
+    <metapackage/>
+  </export>
+</package>
