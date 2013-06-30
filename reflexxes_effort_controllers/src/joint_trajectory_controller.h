@@ -99,27 +99,22 @@ namespace reflexxes_effort_controllers
 
 class JointTrajectoryController: public controller_interface::Controller<hardware_interface::EffortJointInterface>
 {
-public:
 
+public:
   JointTrajectoryController();
   ~JointTrajectoryController();
 
-  bool init(hardware_interface::EffortJointInterface*robot, const std::string &joint_name,const control_toolbox::Pid &pid);
+public:
   bool init(hardware_interface::EffortJointInterface *robot, ros::NodeHandle &n);
-
-  /*!
-   * \brief Give set position of the joint for next update: revolute (angle) and prismatic (position)
-   *
-   * \param command
-   */
-  void setCommand(double cmd);
-
   void starting(const ros::Time& time);
-  
-  /*!
-   * \brief Issues commands to the joint. Should be called at regular intervals
-   */
+  void stopping(const ros::Time& time) { };
   void update(const ros::Time& time, const ros::Duration& period);
+
+public:
+  // Internal initialization
+  bool init(hardware_interface::EffortJointInterface *robot, const std::string &joint_name,const control_toolbox::Pid &pid);
+
+  void setCommand(double cmd);
 
   void getGains(double &p, double &i, double &d, double &i_max, double &i_min);
   void setGains(const double &p, const double &i, const double &d, const double &i_max, const double &i_min);
@@ -127,15 +122,29 @@ public:
   std::string getJointName();
   hardware_interface::JointHandle joint_;
   boost::shared_ptr<const urdf::Joint> joint_urdf_;
-  realtime_tools::RealtimeBuffer<double> command_;             /**< Last commanded position. */
+  /**< Last commanded position. */
+  realtime_tools::RealtimeBuffer<double> command_; 
 
 private:
+  ros::NodeHandle nh_;
   int loop_count_;
-  control_toolbox::Pid pid_controller_;       /**< Internal PID controller. */
+  int decimation_;
 
-  boost::scoped_ptr<
-    realtime_tools::RealtimePublisher<
-      controllers_msgs::JointControllerState> > controller_state_publisher_ ;
+  //! Trajectory Generator
+  boost::shared_ptr<ReflexxesAPI> rml_;
+  boost::shared_ptr<RMLPositionInputParameters> rml_in_;
+  boost::shared_ptr<RMLPositionOutputParameters> rml_out_;
+  RMLPositionFlags rml_flags_;
+  ros::Time traj_start_time_;
+
+  //! Trajectory parameters
+  double max_pos_tolerance_;
+  
+  //! Internal PID controller.
+  control_toolbox::Pid pid_controller_;       
+
+  boost::scoped_ptr< realtime_tools::RealtimePublisher< controllers_msgs::JointControllerState> > 
+    controller_state_publisher_ ;
 
   ros::Subscriber sub_command_;
   void setCommandCB(const std_msgs::Float64ConstPtr& msg);
