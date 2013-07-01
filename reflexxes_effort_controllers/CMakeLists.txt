@@ -9,6 +9,7 @@ find_package(catkin REQUIRED
   std_msgs
   control_toolbox
   controllers_msgs
+  trajectory_msgs 
   hardware_interface
   controller_interface 
   realtime_tools

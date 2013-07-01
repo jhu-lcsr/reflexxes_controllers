@@ -12,6 +12,7 @@
 
   <build_depend>realtime_tools</build_depend>
   <build_depend>controllers_msgs</build_depend>
+  <build_depend>trajectory_msgs</build_depend>
   <build_depend>std_msgs</build_depend>
   <build_depend>hardware_interface</build_depend>
   <build_depend>controller_interface</build_depend>
@@ -23,6 +24,7 @@
   <run_depend>controller_interface</run_depend>
   <run_depend>realtime_tools</run_depend>
   <run_depend>controllers_msgs</run_depend>
+  <run_depend>trajectory_msgs</run_depend>
   <run_depend>std_msgs</run_depend>
   <run_depend>hardware_interface</run_depend>
   <run_depend>control_toolbox</run_depend>

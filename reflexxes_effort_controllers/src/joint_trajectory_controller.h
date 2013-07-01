@@ -89,6 +89,8 @@ Current state of the controller, including pid error and gains.
 #include <controllers_msgs/JointControllerState.h>
 #include <realtime_tools/realtime_buffer.h>
 
+#include <trajectory_msgs/JointTrajectory.h>
+
 #include <ReflexxesAPI.h>
 #include <RMLPositionFlags.h>
 #include <RMLPositionInputParameters.h>
@@ -111,30 +113,28 @@ namespace reflexxes_effort_controllers
     void update(const ros::Time& time, const ros::Duration& period);
 
   public:
-    // Internal initialization
-    bool init(hardware_interface::EffortJointInterface *robot, const std::string &joint_name,const control_toolbox::Pid &pid);
-
-    void setCommand(double cmd);
-    int computeTrajectory(
-        const ros::Time& time, 
-        const ros::Duration& period,
-        const double pos_actual,
-        const double vel_actual,
-        const double pos_ref);
-
-    void getGains(double &p, double &i, double &d, double &i_max, double &i_min);
-    void setGains(const double &p, const double &i, const double &d, const double &i_max, const double &i_min);
-
-    std::string getJointName();
-    hardware_interface::JointHandle joint_;
-    boost::shared_ptr<const urdf::Joint> joint_urdf_;
     /**< Last commanded position. */
-    realtime_tools::RealtimeBuffer<double> command_; 
+    realtime_tools::RealtimeBuffer<trajectory_msgs::JointTrajectory> trajectory_command_buffer_; 
+
+    size_t n_joints_;
+    std::vector<std::string> joint_names_;
+    std::vector<control_toolbox::Pid> pids_;
+    std::vector<double> position_tolerances_;
+    std::vector<double> max_accelerations_;
+    std::vector<double> max_jerks_;
+    std::vector<double> commanded_efforts_;
+    std::vector<hardware_interface::JointHandle> joints_;
+    std::vector<boost::shared_ptr<const urdf::Joint> > urdf_joints_;
+
+    size_t point_index_;
+    ros::Time commanded_start_time_;
 
   private:
     ros::NodeHandle nh_;
     int loop_count_;
     int decimation_;
+
+    void rml_debug(const ros::console::levels::Level level);
 
     //! Trajectory Generator
     boost::shared_ptr<ReflexxesAPI> rml_;
@@ -144,19 +144,20 @@ namespace reflexxes_effort_controllers
     ros::Time traj_start_time_;
 
     //! Trajectory parameters
-    double max_pos_tolerance_;
-    double max_acceleration_;
     double sampling_resolution_;
     bool new_reference_;
+    bool recompute_trajectory_;
 
     //! Internal PID controller.
     control_toolbox::Pid pid_controller_;       
 
-    boost::scoped_ptr< realtime_tools::RealtimePublisher< controllers_msgs::JointControllerState> > 
+    boost::scoped_ptr<realtime_tools::RealtimePublisher<controllers_msgs::JointControllerState> > 
       controller_state_publisher_ ;
 
-    ros::Subscriber sub_command_;
-    void setCommandCB(const std_msgs::Float64ConstPtr& msg);
+    // Command subscriber
+    ros::Subscriber trajectory_command_sub_;
+    void trajectoryCommandCB(const trajectory_msgs::JointTrajectoryConstPtr& msg);
+    void setTrajectoryCommand(const trajectory_msgs::JointTrajectoryConstPtr& msg);
   };
 
 } // namespace
