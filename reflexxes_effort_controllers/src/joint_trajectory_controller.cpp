@@ -59,7 +59,9 @@ namespace reflexxes_effort_controllers {
     : loop_count_(0),
     decimation_(10),
     max_pos_tolerance_(0.0),
-    new_reference_(false)
+    max_acceleration_(0.5),
+    new_reference_(false),
+    sampling_resolution_(0.001)
   {}
 
   JointTrajectoryController::~JointTrajectoryController()
@@ -122,15 +124,23 @@ namespace reflexxes_effort_controllers {
       ROS_INFO("No position_tolerance specified (namespace: %s), using default.", nh_.getNamespace().c_str());
     }
 
+    if (!nh_.getParam("max_acceleration", max_acceleration_)) {
+      ROS_INFO("No max_acceleration specified (namespace: %s), using default.", nh_.getNamespace().c_str());
+    }
+
+    if (!nh_.getParam("sampling_resolution", sampling_resolution_)) {
+      ROS_INFO("No sampling_resolution specified (namespace: %s), using default.", nh_.getNamespace().c_str());
+    }
+
     // Create trajectory generator
     // TODO: Scale this to multiple joints
-    rml_.reset(new ReflexxesAPI(1, 0.001));
+    rml_.reset(new ReflexxesAPI(1, sampling_resolution_));
     rml_in_.reset(new RMLPositionInputParameters(1));
     rml_out_.reset(new RMLPositionOutputParameters(1));
 
     // Get RML parameters from URDF
     rml_in_->MaxVelocityVector->VecData[0] = joint_urdf_->limits->velocity;
-    rml_in_->MaxAccelerationVector->VecData[0] = 0.5;
+    rml_in_->MaxAccelerationVector->VecData[0] = max_acceleration_;
     rml_in_->MaxJerkVector->VecData[0] = 1000;
 
     rml_flags_.BehaviorAfterFinalStateOfMotionIsReached = RMLPositionFlags::RECOMPUTE_TRAJECTORY;
@@ -170,6 +180,7 @@ namespace reflexxes_effort_controllers {
   {
     command_.initRT(joint_.getPosition());
     pid_controller_.reset();
+    new_reference_ = true;
   }
 
 

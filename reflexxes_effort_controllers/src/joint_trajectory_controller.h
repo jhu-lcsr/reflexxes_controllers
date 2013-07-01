@@ -145,6 +145,8 @@ namespace reflexxes_effort_controllers
 
     //! Trajectory parameters
     double max_pos_tolerance_;
+    double max_acceleration_;
+    double sampling_resolution_;
     bool new_reference_;
 
     //! Internal PID controller.
