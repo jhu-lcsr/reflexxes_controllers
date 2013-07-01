@@ -1,5 +1,5 @@
-Controllers Using the Reflexxes Motion Libraries
-================================================
+Reflexxes Controllers
+=====================
 
 This repository contains [ros_control](github.com/ros-controls/ros_control)-based controllers using the [Reflexxes Motion Libraries](reflexxes.com).
 
