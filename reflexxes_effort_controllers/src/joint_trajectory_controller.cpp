@@ -58,7 +58,8 @@ namespace reflexxes_effort_controllers {
   JointTrajectoryController::JointTrajectoryController()
     : loop_count_(0),
     decimation_(10),
-    max_pos_tolerance_(0.0)
+    max_pos_tolerance_(0.0),
+    new_reference_(false)
   {}
 
   JointTrajectoryController::~JointTrajectoryController()
@@ -129,6 +130,10 @@ namespace reflexxes_effort_controllers {
 
     // Get RML parameters from URDF
     rml_in_->MaxVelocityVector->VecData[0] = joint_urdf_->limits->velocity;
+    rml_in_->MaxAccelerationVector->VecData[0] = 0.5;
+    rml_in_->MaxJerkVector->VecData[0] = 1000;
+
+    rml_flags_.BehaviorAfterFinalStateOfMotionIsReached = RMLPositionFlags::RECOMPUTE_TRAJECTORY;
 
     return true;
   }
@@ -156,6 +161,8 @@ namespace reflexxes_effort_controllers {
     //  * no non-rt thread is calling the same function (we're not subscribing to ros callbacks)
     //  * there is only one single rt thread
     command_.writeFromNonRT(cmd);
+    pid_controller_.reset();
+    new_reference_ = true;
   }
 
 
@@ -166,36 +173,65 @@ namespace reflexxes_effort_controllers {
   }
 
 
-  void JointTrajectoryController::update(const ros::Time& time, const ros::Duration& period)
+  int JointTrajectoryController::computeTrajectory(
+      const ros::Time& time, 
+      const ros::Duration& period,
+      const double pos_actual,
+      const double vel_actual,
+      const double pos_ref)
+  {
+    ROS_DEBUG("Recomputing trajectory...");
+
+    // Store the traj start time
+    traj_start_time_ = time;
+
+    // Update RML input parameters
+    rml_in_->CurrentPositionVector->VecData[0] = pos_actual;
+    rml_in_->CurrentVelocityVector->VecData[0] = vel_actual;
+    rml_in_->CurrentAccelerationVector->VecData[0] = 0.0;
+
+    rml_in_->TargetPositionVector->VecData[0] = pos_ref;
+    rml_in_->TargetVelocityVector->VecData[0] = 0.0;
+
+    rml_in_->SelectionVector->VecData[0] = true;
+
+    // Compute trajectory
+    int rml_result = 0;
+    rml_result = rml_->RMLPosition(
+        *rml_in_.get(), 
+        rml_out_.get(), 
+        rml_flags_);
+
+    new_reference_ = false;
+
+    return rml_result;
+  }
+
+  void JointTrajectoryController::update(
+      const ros::Time& time, 
+      const ros::Duration& period)
   {
 
     // Use this to change the desired point
-    double ref_pos = *(command_.readFromRT());
+    double pos_ref = *(command_.readFromRT());
 
-    // Update RML input parameters
-    rml_in_->CurrentPositionVector->VecData[0] = joint_.getPosition();
-    rml_in_->CurrentVelocityVector->VecData[0] = joint_.getVelocity();
-
-    rml_in_->TargetPositionVector->VecData[0] = ref_pos;
-    rml_in_->TargetVelocityVector->VecData[0] = 0.0;
+    // Convenience variables
+    double pos_actual = joint_.getPosition(),
+           vel_actual = joint_.getVelocity();
 
     int rml_result = 0;
 
     // Compute RML traj if the error is too large
-    if(std::abs(ref_pos - joint_.getPosition()) > max_pos_tolerance_) {
-      // Store the traj start time
-      traj_start_time_ = time;
-      // Compute trajectory
-      rml_result = rml_->RMLPosition(
-          *rml_in_.get(), 
-          rml_out_.get(), 
-          rml_flags_);
+    if(new_reference_ || 
+        std::abs(rml_out_->NewPositionVector->VecData[0] - pos_actual) > max_pos_tolerance_) {
+      rml_result = this->computeTrajectory(
+          time, period, pos_actual, vel_actual, pos_ref);
+    } else {
+      // Sample the computed trajectory
+      rml_result = rml_->RMLPositionAtAGivenSampleTime(
+        (time - traj_start_time_).toSec(),
+        rml_out_.get());
     }
-
-    // Sample the computed trajectory
-    rml_result = rml_->RMLPositionAtAGivenSampleTime(
-      (time - traj_start_time_).toSec(),
-      rml_out_.get());
 
     // Convenience variables
     double pos_target = rml_out_->NewPositionVector->VecData[0],
@@ -209,7 +245,7 @@ namespace reflexxes_effort_controllers {
       // Revolute joint with limits
       case urdf::Joint::REVOLUTE:
         angles::shortest_angular_distance_with_limits(
-            joint_.getPosition(),
+            pos_actual,
             pos_target, 
             joint_urdf_->limits->lower, 
             joint_urdf_->limits->upper,
@@ -219,22 +255,30 @@ namespace reflexxes_effort_controllers {
         // Continuous joint with no limits
       case urdf::Joint::CONTINUOUS:
         pos_error = angles::shortest_angular_distance(
-            joint_.getPosition(), 
+            pos_actual,
             pos_target);
         break;
 
         // Prismatic joint types
       default:
-        pos_error = pos_target - joint_.getPosition();
+        pos_error = pos_target - pos_actual;
         break;
     };
 
     // Compute velocity error 
-    vel_error = vel_target - joint_.getVelocity();
+    vel_error = vel_target - vel_actual;
 
     // Set the PID error and compute the PID command with nonuniform
     // time step size. This also allows the user to pass in a precomputed derivative error. 
     double commanded_effort = pid_controller_.computeCommand(pos_error, vel_error, period); 
+
+    // Only set a non-zero effort command if the 
+    if(rml_result < 0) {
+      ROS_ERROR("Reflexxes error code: %d. Setting command to zero.", rml_result);
+      commanded_effort = 0.0;
+    }
+
+    // Set the command
     joint_.setCommand(commanded_effort);
 
     // publish state
@@ -242,8 +286,8 @@ namespace reflexxes_effort_controllers {
       if(controller_state_publisher_ && controller_state_publisher_->trylock()) {
         controller_state_publisher_->msg_.header.stamp = time;
         controller_state_publisher_->msg_.set_point = pos_target;
-        controller_state_publisher_->msg_.process_value = joint_.getPosition();
-        controller_state_publisher_->msg_.process_value_dot = joint_.getVelocity();
+        controller_state_publisher_->msg_.process_value = pos_actual;
+        controller_state_publisher_->msg_.process_value_dot = vel_actual;
         controller_state_publisher_->msg_.error = pos_error;
         controller_state_publisher_->msg_.time_step = period.toSec();
         controller_state_publisher_->msg_.command = commanded_effort;
@@ -267,4 +311,6 @@ namespace reflexxes_effort_controllers {
 
 } // namespace
 
-PLUGINLIB_EXPORT_CLASS( reflexxes_effort_controllers::JointTrajectoryController, controller_interface::ControllerBase)
+PLUGINLIB_EXPORT_CLASS( 
+    reflexxes_effort_controllers::JointTrajectoryController,
+    controller_interface::ControllerBase)

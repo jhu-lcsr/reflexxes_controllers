@@ -7,9 +7,12 @@ project(reflexxes_effort_controllers)
 find_package(catkin REQUIRED 
   roscpp
   std_msgs
+  control_toolbox
   controllers_msgs
   hardware_interface
+  controller_interface 
   realtime_tools
+  urdf
   reflexxes_type2)
 
 ## System dependencies are found with CMake's conventions
@@ -70,8 +73,9 @@ include_directories(include ${catkin_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
 
 ## Declare a cpp library
 add_library(reflexxes_effort_controllers
-   src/joint_trajectory_controller.cpp
- )
+  src/joint_trajectory_controller.cpp
+  )
+target_link_libraries(reflexxes_effort_controllers ${catkin_LIBRARIES})
 
 ## Declare a cpp executable
 # add_executable(reflexxes_effort_controllers_node src/reflexxes_effort_controllers_node.cpp)

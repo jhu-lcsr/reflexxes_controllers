@@ -1,0 +1,12 @@
+<library path="lib/libreflexxes_effort_controllers">
+
+  <class 
+    name="reflexxes_effort_controllers/JointTrajectoryController"
+    type="reflexxes_effort_controllers::JointTrajectoryController"
+    base_class_type="controller_interface::ControllerBase">
+    <description>
+      The JointPositionController tracks position commands. It expects a
+      EffortJointInterface type of hardware interface.
+    </description>
+  </class>
+</library>

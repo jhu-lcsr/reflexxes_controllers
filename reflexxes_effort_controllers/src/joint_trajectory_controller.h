@@ -53,25 +53,25 @@
 #define EFFORT_CONTROLLERS_JOINT_POSITION_CONTROLLER_H
 
 /**
-   @class reflexxes_effort_controllers::JointTrajectoryController
-   @brief Joint Position Controller
+  @class reflexxes_effort_controllers::JointTrajectoryController
+  @brief Joint Position Controller
 
-   This class controls positon using a pid loop.
+  This class controls positon using a pid loop.
 
-   @section ROS ROS interface
+  @section ROS ROS interface
 
-   @param type Must be "reflexxes_effort_controllers::JointTrajectoryController"
-   @param joint Name of the joint to control.
-   @param pid Contains the gains for the PID loop around position.  See: control_toolbox::Pid
+  @param type Must be "reflexxes_effort_controllers::JointTrajectoryController"
+  @param joint Name of the joint to control.
+  @param pid Contains the gains for the PID loop around position.  See: control_toolbox::Pid
 
-   Subscribes to:
+  Subscribes to:
 
-   - @b command (std_msgs::Float64) : The joint position to achieve.
+  - @b command (std_msgs::Float64) : The joint position to achieve.
 
-   Publishes:
+Publishes:
 
-   - @b state (controllers_msgs::JointControllerState) :
-     Current state of the controller, including pid error and gains.
+- @b state (controllers_msgs::JointControllerState) :
+Current state of the controller, including pid error and gains.
 
 */
 
@@ -97,58 +97,65 @@
 namespace reflexxes_effort_controllers
 {
 
-class JointTrajectoryController: public controller_interface::Controller<hardware_interface::EffortJointInterface>
-{
+  class JointTrajectoryController: public controller_interface::Controller<hardware_interface::EffortJointInterface>
+  {
 
-public:
-  JointTrajectoryController();
-  ~JointTrajectoryController();
+  public:
+    JointTrajectoryController();
+    ~JointTrajectoryController();
 
-public:
-  bool init(hardware_interface::EffortJointInterface *robot, ros::NodeHandle &n);
-  void starting(const ros::Time& time);
-  void stopping(const ros::Time& time) { };
-  void update(const ros::Time& time, const ros::Duration& period);
+  public:
+    bool init(hardware_interface::EffortJointInterface *robot, ros::NodeHandle &n);
+    void starting(const ros::Time& time);
+    void stopping(const ros::Time& time) { };
+    void update(const ros::Time& time, const ros::Duration& period);
 
-public:
-  // Internal initialization
-  bool init(hardware_interface::EffortJointInterface *robot, const std::string &joint_name,const control_toolbox::Pid &pid);
+  public:
+    // Internal initialization
+    bool init(hardware_interface::EffortJointInterface *robot, const std::string &joint_name,const control_toolbox::Pid &pid);
 
-  void setCommand(double cmd);
+    void setCommand(double cmd);
+    int computeTrajectory(
+        const ros::Time& time, 
+        const ros::Duration& period,
+        const double pos_actual,
+        const double vel_actual,
+        const double pos_ref);
 
-  void getGains(double &p, double &i, double &d, double &i_max, double &i_min);
-  void setGains(const double &p, const double &i, const double &d, const double &i_max, const double &i_min);
+    void getGains(double &p, double &i, double &d, double &i_max, double &i_min);
+    void setGains(const double &p, const double &i, const double &d, const double &i_max, const double &i_min);
 
-  std::string getJointName();
-  hardware_interface::JointHandle joint_;
-  boost::shared_ptr<const urdf::Joint> joint_urdf_;
-  /**< Last commanded position. */
-  realtime_tools::RealtimeBuffer<double> command_; 
+    std::string getJointName();
+    hardware_interface::JointHandle joint_;
+    boost::shared_ptr<const urdf::Joint> joint_urdf_;
+    /**< Last commanded position. */
+    realtime_tools::RealtimeBuffer<double> command_; 
 
-private:
-  ros::NodeHandle nh_;
-  int loop_count_;
-  int decimation_;
+  private:
+    ros::NodeHandle nh_;
+    int loop_count_;
+    int decimation_;
 
-  //! Trajectory Generator
-  boost::shared_ptr<ReflexxesAPI> rml_;
-  boost::shared_ptr<RMLPositionInputParameters> rml_in_;
-  boost::shared_ptr<RMLPositionOutputParameters> rml_out_;
-  RMLPositionFlags rml_flags_;
-  ros::Time traj_start_time_;
+    //! Trajectory Generator
+    boost::shared_ptr<ReflexxesAPI> rml_;
+    boost::shared_ptr<RMLPositionInputParameters> rml_in_;
+    boost::shared_ptr<RMLPositionOutputParameters> rml_out_;
+    RMLPositionFlags rml_flags_;
+    ros::Time traj_start_time_;
 
-  //! Trajectory parameters
-  double max_pos_tolerance_;
-  
-  //! Internal PID controller.
-  control_toolbox::Pid pid_controller_;       
+    //! Trajectory parameters
+    double max_pos_tolerance_;
+    bool new_reference_;
 
-  boost::scoped_ptr< realtime_tools::RealtimePublisher< controllers_msgs::JointControllerState> > 
-    controller_state_publisher_ ;
+    //! Internal PID controller.
+    control_toolbox::Pid pid_controller_;       
 
-  ros::Subscriber sub_command_;
-  void setCommandCB(const std_msgs::Float64ConstPtr& msg);
-};
+    boost::scoped_ptr< realtime_tools::RealtimePublisher< controllers_msgs::JointControllerState> > 
+      controller_state_publisher_ ;
+
+    ros::Subscriber sub_command_;
+    void setCommandCB(const std_msgs::Float64ConstPtr& msg);
+  };
 
 } // namespace
 
