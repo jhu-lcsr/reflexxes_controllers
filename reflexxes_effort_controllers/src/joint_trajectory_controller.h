@@ -118,7 +118,7 @@ namespace reflexxes_effort_controllers
 
     size_t n_joints_;
     std::vector<std::string> joint_names_;
-    std::vector<control_toolbox::Pid> pids_;
+    std::vector< boost::shared_ptr<control_toolbox::Pid> > pids_;
     std::vector<double> position_tolerances_;
     std::vector<double> max_accelerations_;
     std::vector<double> max_jerks_;
@@ -147,9 +147,6 @@ namespace reflexxes_effort_controllers
     double sampling_resolution_;
     bool new_reference_;
     bool recompute_trajectory_;
-
-    //! Internal PID controller.
-    control_toolbox::Pid pid_controller_;       
 
     boost::scoped_ptr<realtime_tools::RealtimePublisher<controllers_msgs::JointControllerState> > 
       controller_state_publisher_ ;

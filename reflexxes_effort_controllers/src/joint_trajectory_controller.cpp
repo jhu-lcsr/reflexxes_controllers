@@ -167,12 +167,12 @@ namespace reflexxes_effort_controllers {
         ROS_INFO("Loading joint information for joint '%s' (namespace: %s)", joint_names_[i].c_str(), joint_nh.getNamespace().c_str());
 
         // Initialize PID from rosparam
-        control_toolbox::Pid pid;
-        if (!pid.init(ros::NodeHandle(joint_nh, "pid"))) {
+        pids_[i].reset(new control_toolbox::Pid());
+        if (!pids_[i]->init(ros::NodeHandle(joint_nh, "pid"))) 
+        {
+          ROS_WARN_STREAM_NAMED("jtc","Failed to initialize PID from rosparam");
           return false;
         }
-        // Store pid
-        pids_[i] = pid;
 
         // Get position tolerance
         if (!joint_nh.hasParam("position_tolerance")) {
@@ -252,7 +252,6 @@ namespace reflexxes_effort_controllers {
     initial_point.time_from_start = ros::Duration(1.0);
     initial_command.points.push_back(initial_point);
     trajectory_command_buffer_.initRT(initial_command);
-    pid_controller_.reset();
     new_reference_ = true;
   }
 
@@ -379,7 +378,7 @@ namespace reflexxes_effort_controllers {
 
       // Set the PID error and compute the PID command with nonuniform time
       // step size.
-      commanded_efforts_[i] = pids_[i].computeCommand(pos_error, vel_error, period); 
+      commanded_efforts_[i] = pids_[i]->computeCommand(pos_error, vel_error, period);
     }
 
     // Only set a non-zero effort command if the 
@@ -418,7 +417,7 @@ namespace reflexxes_effort_controllers {
           controller_state_publisher_->msg_.command = commanded_effort;
 
           double dummy;
-          pids_[i].getGains(
+          pids_[i]->getGains(
               controller_state_publisher_->msg_.p,
               controller_state_publisher_->msg_.i,
               controller_state_publisher_->msg_.d,
