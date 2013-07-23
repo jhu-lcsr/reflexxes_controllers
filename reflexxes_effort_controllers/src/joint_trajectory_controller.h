@@ -70,7 +70,7 @@
 
 Publishes:
 
-- @b state (controllers_msgs::JointControllerState) :
+- @b state (control_msgs::JointControllerState) :
 Current state of the controller, including pid error and gains.
 
 */
@@ -84,9 +84,9 @@ Current state of the controller, including pid error and gains.
 #include <realtime_tools/realtime_publisher.h>
 #include <hardware_interface/joint_command_interface.h>
 #include <controller_interface/controller.h>
-#include <controllers_msgs/JointControllerState.h>
+#include <control_msgs/JointControllerState.h>
 #include <std_msgs/Float64.h>
-#include <controllers_msgs/JointControllerState.h>
+#include <control_msgs/JointControllerState.h>
 #include <realtime_tools/realtime_buffer.h>
 
 #include <trajectory_msgs/JointTrajectory.h>
@@ -148,7 +148,7 @@ namespace reflexxes_effort_controllers
     bool new_reference_;
     bool recompute_trajectory_;
 
-    boost::scoped_ptr<realtime_tools::RealtimePublisher<controllers_msgs::JointControllerState> > 
+    boost::scoped_ptr<realtime_tools::RealtimePublisher<control_msgs::JointControllerState> > 
       controller_state_publisher_ ;
 
     // Command subscriber

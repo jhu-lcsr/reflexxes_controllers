@@ -8,7 +8,7 @@ find_package(catkin REQUIRED
   roscpp
   std_msgs
   control_toolbox
-  controllers_msgs
+  control_msgs
   trajectory_msgs 
   hardware_interface
   controller_interface 
