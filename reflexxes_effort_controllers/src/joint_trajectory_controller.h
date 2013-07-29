@@ -55,6 +55,7 @@
 /**
   @class reflexxes_effort_controllers::JointTrajectoryController
   @brief Joint Position Controller
+  @author Jonathan Bohren, Dave Coleman
 
   This class controls positon using a pid loop.
 
@@ -76,6 +77,9 @@ Current state of the controller, including pid error and gains.
 */
 
 #include <ros/node_handle.h>
+#include <control_msgs/FollowJointTrajectoryAction.h>
+#include <actionlib/server/simple_action_server.h>
+
 #include <urdf/model.h>
 #include <control_toolbox/pid.h>
 #include <control_toolbox/pid_gains_setter.h>
@@ -109,7 +113,7 @@ namespace reflexxes_effort_controllers
   public:
     bool init(hardware_interface::EffortJointInterface *robot, ros::NodeHandle &n);
     void starting(const ros::Time& time);
-    void stopping(const ros::Time& time) { };
+    void stopping(const ros::Time& time);
     void update(const ros::Time& time, const ros::Duration& period);
 
   public:
@@ -148,13 +152,39 @@ namespace reflexxes_effort_controllers
     bool new_reference_;
     bool recompute_trajectory_;
 
-    boost::scoped_ptr<realtime_tools::RealtimePublisher<control_msgs::JointControllerState> > 
-      controller_state_publisher_ ;
-
     // Command subscriber
     ros::Subscriber trajectory_command_sub_;
-    void trajectoryCommandCB(const trajectory_msgs::JointTrajectoryConstPtr& msg);
-    void setTrajectoryCommand(const trajectory_msgs::JointTrajectoryConstPtr& msg);
+    
+    /**
+     * @brief Callback from a recieved goal from the action server
+     * @param goal trajectory action goal
+     */
+    void trajectoryActionCommandCB(const control_msgs::FollowJointTrajectoryGoalConstPtr& goal);
+ 
+    /**
+     * @brief Callback from a recieved goal from the published topic message
+     * @param msg trajectory goal
+     */
+    void trajectoryMsgCommandCB(const trajectory_msgs::JointTrajectoryConstPtr& msg);
+ 
+    /**
+     * @brief Process a joint trajectory
+     * @param msg trajectory goal
+     */
+    void setTrajectoryCommand(const trajectory_msgs::JointTrajectory& msg, bool is_action);
+
+    // Action Server
+    typedef actionlib::SimpleActionServer<control_msgs::FollowJointTrajectoryAction> FJTAS;
+    boost::scoped_ptr<FJTAS> action_server_;
+    control_msgs::FollowJointTrajectoryResult trajectory_result_;
+    bool is_action_;
+
+    // Publish controller state msgs
+    std::vector<
+      boost::shared_ptr<
+        realtime_tools::RealtimePublisher<
+          control_msgs::JointControllerState> > > controller_state_publishers_;
+
   };
 
 } // namespace
