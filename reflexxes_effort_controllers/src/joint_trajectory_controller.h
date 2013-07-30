@@ -171,6 +171,7 @@ namespace reflexxes_effort_controllers
     bool new_reference_traj_; // indicate a new trajectory msg is received (master trajectory)
     bool compute_trajectory_point_; // indicate readiness to process next point in trajectory msg OR recompute current one
     bool final_state_reached_;
+    double traj_point_execution_time_; // this is MinimumSyncTime - how long to run each sub-trajectory between trajectory msg points
 
     // Command subscriber
     ros::Subscriber trajectory_command_sub_;
