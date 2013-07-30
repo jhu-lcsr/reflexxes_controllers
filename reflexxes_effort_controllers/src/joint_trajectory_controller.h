@@ -100,6 +100,7 @@ Current state of the controller, including pid error and gains.
 #include <RMLPositionInputParameters.h>
 #include <RMLPositionOutputParameters.h>
 
+#include <std_msgs/Empty.h> // temp
 
 #include <effort_controllers/joint_position_controller.h>
 
@@ -119,6 +120,17 @@ namespace reflexxes_effort_controllers
     void starting(const ros::Time& time);
     void stopping(const ros::Time& time);
     void update(const ros::Time& time, const ros::Duration& period);
+    void update2(const ros::Time& time, const ros::Duration& period);
+    void updateMulti(const ros::Time& time, const ros::Duration& period);
+    
+    /**
+     * \brief Cacluates a new target for all the joints based on the current trajectory point 
+              using Reflexxes
+     * \param time current time
+     * \param period update period
+     * \return true if no errors
+     */
+    bool updateTrajectory(const ros::Time& time, const ros::Duration& period);
 
   public:
     /**< Last commanded position. */
@@ -141,22 +153,28 @@ namespace reflexxes_effort_controllers
     int decimation_;
 
     void rml_debug(const ros::console::levels::Level level);
-
+    bool checkRMLValidity();
+    bool checkNewTrajectory(const ros::Time& time, const ros::Duration& period,
+      const trajectory_msgs::JointTrajectory &commanded_trajectory);
+      
+    bool verbose_;
+    
     //! Trajectory Generator
     boost::shared_ptr<ReflexxesAPI> rml_;
     boost::shared_ptr<RMLPositionInputParameters> rml_in_;
     boost::shared_ptr<RMLPositionOutputParameters> rml_out_;
     RMLPositionFlags rml_flags_;
-    ros::Time traj_start_time_;
+    ros::Time traj_point_start_time_;
 
     //! Trajectory parameters
     double sampling_resolution_;
-    bool new_reference_;
-    bool recompute_trajectory_;
+    bool new_reference_traj_; // indicate a new trajectory msg is received (master trajectory)
+    bool compute_trajectory_point_; // indicate readiness to process next point in trajectory msg OR recompute current one
     bool final_state_reached_;
 
     // Command subscriber
     ros::Subscriber trajectory_command_sub_;
+    ros::Subscriber trajectory_test_command_sub_;
     
     /**
      * @brief Callback from a recieved goal from the action server
@@ -169,7 +187,9 @@ namespace reflexxes_effort_controllers
      * @param msg trajectory goal
      */
     void trajectoryMsgCommandCB(const trajectory_msgs::JointTrajectoryConstPtr& msg);
- 
+
+    void trajectoryTestCommandCB(const std_msgs::EmptyConstPtr& thing);
+
     /**
      * @brief Process a joint trajectory
      * @param msg trajectory goal

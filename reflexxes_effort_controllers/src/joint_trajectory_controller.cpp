@@ -61,10 +61,11 @@ namespace reflexxes_effort_controllers {
     : loop_count_(0),
       decimation_(10),
       sampling_resolution_(0.001),
-      new_reference_(false),
-      recompute_trajectory_(false),
+      new_reference_traj_(false),
+      compute_trajectory_point_(false),
       is_action_(false),
-      final_state_reached_(false)
+      final_state_reached_(false),
+      point_index_(0)
   {}
 
   JointTrajectoryController::~JointTrajectoryController()
@@ -97,6 +98,18 @@ namespace reflexxes_effort_controllers {
     ROS_LOG_STREAM(level,ROSCONSOLE_DEFAULT_NAME,"RML INPUT AlternativeTargetVelocityVector: "<<(*rml_in_->AlternativeTargetVelocityVector));
   }
 
+  bool JointTrajectoryController::checkRMLValidity()
+  {
+    if(rml_in_->CheckForValidity()) {
+      ROS_INFO_STREAM("RML INPUT Configuration Valid.");
+      this->rml_debug(ros::console::levels::Debug);
+    } else {
+      ROS_ERROR_STREAM("RML INPUT Configuration Invalid!");
+      this->rml_debug(ros::console::levels::Warn);
+      return false;
+    }
+    return true;
+  }
 
   bool JointTrajectoryController::init(
       hardware_interface::EffortJointInterface *robot,
@@ -165,7 +178,7 @@ namespace reflexxes_effort_controllers {
       // Get the joint-namespace nodehandle
       {
         ros::NodeHandle joint_nh(nh_, "joints/"+joint_names_[i]);
-        ROS_INFO("Loading joint information for joint '%s' (namespace: %s)", joint_names_[i].c_str(), joint_nh.getNamespace().c_str());
+        ROS_INFO("Loading joint info for '%s', Namespace: %s", joint_names_[i].c_str(), joint_nh.getNamespace().c_str());
 
         position_controllers_[i].reset(new effort_controllers::JointPositionController());
         position_controllers_[i]->init(robot, joint_nh);
@@ -228,6 +241,9 @@ namespace reflexxes_effort_controllers {
     trajectory_command_sub_ = nh_.subscribe<trajectory_msgs::JointTrajectory>(
       "trajectory_command", 1, &JointTrajectoryController::trajectoryMsgCommandCB, this);
 
+    trajectory_test_command_sub_ = nh_.subscribe<std_msgs::Empty>(
+      "test_command", 1, &JointTrajectoryController::trajectoryTestCommandCB, this);
+
     // Create action server
     action_server_.reset(new FJTAS(nh_, "follow_joint_trajectory",
         boost::bind(&JointTrajectoryController::trajectoryActionCommandCB, this, _1), false));
@@ -244,16 +260,23 @@ namespace reflexxes_effort_controllers {
     trajectory_msgs::JointTrajectory initial_command;
     trajectory_msgs::JointTrajectoryPoint initial_point;
     for(int i=0; i<n_joints_; i++) {
-      //      initial_point.positions.push_back(joints_[i].getPosition());
-      //      initial_point.velocities.push_back(joints_[i].getVelocity());
-      initial_point.positions.push_back(0);
+      initial_point.positions.push_back(joints_[i].getPosition());
+      //initial_point.velocities.push_back(joints_[i].getVelocity());
+      //initial_point.positions.push_back(0);
       initial_point.velocities.push_back(0);
       initial_point.accelerations.push_back(0.0);
     }
     initial_point.time_from_start = ros::Duration(1.0);
     initial_command.points.push_back(initial_point);
     trajectory_command_buffer_.initRT(initial_command);
-    new_reference_ = true;
+    new_reference_traj_ = true;
+
+    ROS_INFO_STREAM_NAMED("temp","STARTING TRAJECTORY CONTROLLERS ----------------------------");
+    ROS_INFO_STREAM_NAMED("temp","STARTING TRAJECTORY CONTROLLERS ----------------------------");
+    ROS_INFO_STREAM_NAMED("temp","STARTING TRAJECTORY CONTROLLERS ----------------------------");
+
+    const std_msgs::EmptyConstPtr thing;
+    trajectoryTestCommandCB(thing);
   }
 
   void JointTrajectoryController::stopping(const ros::Time& time)
@@ -261,100 +284,160 @@ namespace reflexxes_effort_controllers {
     action_server_->shutdown();
   }
 
-  void JointTrajectoryController::update(
-      const ros::Time& time, 
-      const ros::Duration& period)
+  void JointTrajectoryController::update(const ros::Time& time, const ros::Duration& period)
   {
-    //ROS_INFO_STREAM_NAMED("temp","Time: " << time << " Period: " << period.toSec() );
+    // Debug info
+    static size_t counter = 0;
+    verbose_ = false;
+    counter ++;
+    if( counter % 100 == 0 )
+      verbose_ = true;
 
+
+    // Check if there is a new trajectory to update
+    bool success = updateTrajectory(time,period);
+
+    // Apply joint commands
+    for(size_t i=0; i<n_joints_; i++) 
+    {
+      if( success )
+      {
+        position_controllers_[i]->setCommand(
+          rml_out_->NewPositionVector->VecData[i], 
+          rml_out_->NewVelocityVector->VecData[i]);
+
+        if( verbose_ )
+          ROS_INFO_STREAM_NAMED("temp","setting command " << 
+            rml_out_->NewPositionVector->VecData[i] << " and " <<
+            rml_out_->NewVelocityVector->VecData[i] );
+      }
+      else
+      {
+        ROS_ERROR_STREAM_NAMED("temp","DOING NOTHING BC ERROR ---------------------------");
+
+        // Freeze the controllers at current position and 0 velocity
+        position_controllers_[i]->setCommand(joints_[i].getPosition(), 0.0);          
+      }
+
+      // Update the individual joint controllers
+      position_controllers_[i]->update(time, period);
+    }
+  }
+
+  bool JointTrajectoryController::checkNewTrajectory(
+    const ros::Time& time, const ros::Duration& period,
+    const trajectory_msgs::JointTrajectory &commanded_trajectory)
+  {
+    // Choose new trajectory start time
+    if(commanded_trajectory.header.stamp.isZero()) 
+    {
+      // Start trajectory immediately if stamp is zero
+      commanded_start_time_ = time;
+      ROS_WARN_STREAM_NAMED("temp","commanded_start_time = " << commanded_start_time_.toSec() << " (NOW) " );
+    } 
+    else 
+    {
+      ROS_WARN_STREAM_NAMED("temp","commanded_start_time = " << commanded_trajectory.header.stamp.toSec() << " from header" );
+
+      // Check provided trajectory start time - expired
+      if( commanded_trajectory.header.stamp < time )
+      {
+        ROS_ERROR_STREAM_NAMED("temp","Trajectory scheduled to start in the past");
+
+        // Set this new trajectory as old so that it is ignored
+        new_reference_traj_ = false;
+
+        return false; // the new trajectory is bad, ignore it
+      }
+
+      // Check provided trajectory start time - future
+      if( commanded_trajectory.header.stamp > time + period )
+      {
+        ROS_WARN_STREAM_NAMED("temp","Trajectory scheduled to start in the future, waiting...");
+        return false; // pretend like we didn't see it
+      }
+
+      // Start time is good, save it
+      commanded_start_time_ = commanded_trajectory.header.stamp;
+    }
+
+    // Test that all trajectory points have increasing time stamps
+    // \todo
+
+    // Test that all trajectory points are within joint limits
+    // \todo
+
+    // New trajectory passes    
+    return true;
+  }
+
+  bool JointTrajectoryController::updateTrajectory(const ros::Time& time, const ros::Duration& period)
+  {
     // Read the latest commanded trajectory message
     const trajectory_msgs::JointTrajectory &commanded_trajectory = *(trajectory_command_buffer_.readFromRT());
 
-    // Check for a new reference
-    if(new_reference_) {
-      // Start trajectory immediately if stamp is zero
-      if(commanded_trajectory.header.stamp.isZero()) {
-        ROS_WARN_STREAM_NAMED("temp","set from time=" << time << " period="<<period.toSec() );
-        commanded_start_time_ = time + period;
-      } else {
-        commanded_start_time_ = commanded_trajectory.header.stamp;
+    // Check for a new incoming trajectory message
+    if(new_reference_traj_) 
+    {
+      if(checkNewTrajectory(time, period, commanded_trajectory))
+      {
+        // Reset point index so that the first point in the new trajectory is used
+        point_index_ = 0;
+
+        // Signal a fresh trajectory to be calculated
+        compute_trajectory_point_ = true;
+
+        // Set this new trajectory as old
+        new_reference_traj_ = false;
       }
-      // Reset point index
-      point_index_ = 0;
-      recompute_trajectory_ = true;
-      new_reference_ = false;
     }
 
-    // Initialize RML result
+    // Check if there are more points in the trajectory to process
+    bool trajectory_incomplete = point_index_ < commanded_trajectory.points.size();
+    
+    // Initialize RML return value
     int rml_result = 0;
 
-    //bool trajectory_running = commanded_start_time_ >= time;
-    bool trajectory_running = true; // true
-    //    bool trajectory_running = commanded_start_time_ <= time;
-    bool trajectory_incomplete = point_index_ < commanded_trajectory.points.size();
-
-    bool tolerance_violated = false;
-    for(int i=0; i<n_joints_; i++) {
-      if(std::abs(rml_out_->NewPositionVector->VecData[i] - joints_[i].getPosition()) > position_tolerances_[i]) {
-        //recompute_trajectory_ = true;
-
-        /*
-          ROS_WARN_STREAM_NAMED("update","(Re)Computing Trajectory: Joint found outside the tolerance bounds of current trajectory:\n"
-            << "Joint " << joint_names_[i] << " is desired to be at position " << rml_out_->NewPositionVector->VecData[i] 
-            << " but is currently at " << joints_[i].getPosition()
-            << " which is outside the tolerance of " << position_tolerances_[i] );
-          break;
-        */
-        //std::cout << " BAD ";
-        break;
-      }
-    }
-
-    // Compute RML traj after the start time and if there are still points in the queue
-    if(recompute_trajectory_ && trajectory_running && trajectory_incomplete) {
+    // Compute RML trajectory if there are still points in the queue and we finished the last one
+    if(compute_trajectory_point_ && trajectory_incomplete) 
+    {
       ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
-      ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
-      ROS_WARN_STREAM_NAMED("temp","Recomputing trajectory, on point " << point_index_ << " of " 
+      ROS_WARN_STREAM_NAMED("temp","Computing sub-trajectory, on point " << point_index_ << " of " 
         << commanded_trajectory.points.size() );
       ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
-      ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
+
       // Get reference to the active trajectory point
-      const trajectory_msgs::JointTrajectoryPoint &active_traj_point_const = commanded_trajectory.points[point_index_];
-      trajectory_msgs::JointTrajectoryPoint active_traj_point = active_traj_point_const;
+      const trajectory_msgs::JointTrajectoryPoint &active_traj_point = commanded_trajectory.points[point_index_];
 
-      //static double time_from_start_hack = 0;
-      active_traj_point.time_from_start = ros::Duration(point_index_*2);
-
-      // Compute the trajectory
-      ROS_DEBUG("RML Recomputing trajectory...");
+      //ROS_INFO_STREAM_NAMED("temp","point: \n" << active_traj_point);
 
       // Update RML input parameters
-      for(int i=0; i<n_joints_; i++) {
+      for(size_t i=0; i<n_joints_; i++) 
+      {
         rml_in_->CurrentPositionVector->VecData[i] = joints_[i].getPosition();
         rml_in_->CurrentVelocityVector->VecData[i] = joints_[i].getVelocity();
         rml_in_->CurrentAccelerationVector->VecData[i] = 0.0;
-
         rml_in_->TargetPositionVector->VecData[i] = active_traj_point.positions[i];
         rml_in_->TargetVelocityVector->VecData[i] = active_traj_point.velocities[i];
       }
 
       // Store the traj start time
-      traj_start_time_ = time;
+      traj_point_start_time_ = time;
 
       // Set desired execution time for this trajectory (definitely > 0)
-      double min_sync_time = (active_traj_point.time_from_start - (traj_start_time_ - commanded_start_time_)).toSec();
+      double min_sync_time = (active_traj_point.time_from_start - (traj_point_start_time_ - commanded_start_time_)).toSec();
+      //double min_sync_time = std::max(0.0,(active_traj_point.time_from_start - (traj_point_start_time_ - commanded_start_time_)).toSec()));
 
       ROS_DEBUG_STREAM("RML IN: MinimumSynchronizatonTime: " << min_sync_time
-        << "\n Traj point time from start: " << active_traj_point.time_from_start.toSec()  // the delay until starting this point
-        << "\n traj_start_time_: " << traj_start_time_.toSec()   // the time at which we send the command to reflexxes
-        << "\n commanded_start_time_: " << commanded_start_time_.toSec() // when to start execution in the future 
-      );
+        << "\n Traj point time_from_start: " << active_traj_point.time_from_start.toSec()  // the delay until starting this point
+        << "\n traj_point_start_time_ (now): " << traj_point_start_time_.toSec()   // now
+        << "\n commanded_start_time_: " << commanded_start_time_.toSec() ); // start time of the whole trajectory msg
 
       if( min_sync_time < 0 )
       {
         ROS_ERROR_STREAM_NAMED("update","Minimum synchronization time was calculated to be less than zero: " << min_sync_time );        
 
-        min_sync_time = 0.1;
+        min_sync_time = 0.0;
       }
       rml_in_->SetMinimumSynchronizationTime(min_sync_time);
                 
@@ -362,60 +445,82 @@ namespace reflexxes_effort_controllers {
       rml_flags_.BehaviorAfterFinalStateOfMotionIsReached = RMLPositionFlags::RECOMPUTE_TRAJECTORY;
       rml_flags_.SynchronizationBehavior = RMLPositionFlags::ONLY_TIME_SYNCHRONIZATION;
 
-      // Compute trajectory
-      rml_result = rml_->RMLPosition(
-          *rml_in_.get(), 
-          rml_out_.get(), 
-          rml_flags_);
-
-      ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
-      for(int i=0; i<n_joints_; i++)
-        std::cout << "Joint " << i << " = " << rml_out_->NewPositionVector->VecData[i] << std::endl;
-      ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
-      
-      // Disable recompute flag
-      recompute_trajectory_ = false;
-    } else {
+      // Ensure that the RML input is valid
       /*
-      ROS_DEBUG_STREAM_NAMED("temp","Sample pre-computed traj: "
-        << " recompute_trajectory_="<<recompute_trajectory_
-        << " trajectory_running="<<trajectory_running
-        << " trajectory_incomplete="<<trajectory_incomplete);
+      if(!checkRMLValidity())
+        return false;
       */
 
-      //std::cout << " [" << (time - traj_start_time_).toSec() << "s] ";
+      // Have Reflexxes Compute trajectory
+      rml_result = rml_->RMLPosition( *rml_in_.get(), rml_out_.get(), rml_flags_);
 
-      // Sample the already computed trajectory
+      /*
+      ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
+      for(size_t i=0; i<n_joints_; i++)
+        std::cout << "Joint " << i << " = " << rml_out_->NewPositionVector->VecData[i] << std::endl;
+      ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
+      */
+
+      // Disable recompute flag
+      compute_trajectory_point_ = false;
+    } 
+    else  // We are still working on a previous trajectory point plan
+    {
+      
+      if( verbose_ )
+        ROS_DEBUG_STREAM_NAMED("precomputed", "Sample: "
+          << " compute_trajectory_point_="<<compute_trajectory_point_
+          << " trajectory_incomplete="<<trajectory_incomplete
+          << " Sample time = " << (time - traj_point_start_time_).toSec() );
+
+      // Have Reflexxes Sample the already computed trajectory
       rml_result = rml_->RMLPositionAtAGivenSampleTime(
-        (time - traj_start_time_).toSec(),
-        rml_out_.get());
+        (time - traj_point_start_time_).toSec(), rml_out_.get());
+    }
+
+    // Check tolerances -------------------------------------------------------------
+    for(size_t i=0; i<n_joints_; i++) 
+    {
+      // Check this *after* first iteration of RML
+      if(std::abs(rml_out_->NewPositionVector->VecData[i] - joints_[i].getPosition()) > position_tolerances_[i]) 
+      {
+        compute_trajectory_point_ = true;
+
+        /*
+        if(!verbose_)
+          break;
+        */
+
+        if(verbose_)
+          ROS_WARN_STREAM_NAMED("update","TOLERANCE: " << joint_names_[i] << " target: " 
+            << rml_out_->NewPositionVector->VecData[i] 
+            << " actual: " << joints_[i].getPosition() << " tolerance limit: " 
+            << position_tolerances_[i] );                  
+      }
     }
 
     // Error Check -------------------------------------------------------------
     std::string result_msg;
-    bool has_error = false; // flags the PID controllers not to over write the commanded efforts of zero
 
     // Only set a non-zero effort command if the 
     switch(rml_result) {
       case ReflexxesAPI::RML_WORKING:
-        // S'all good.
-        //ROS_INFO_STREAM_NAMED("temp","RML_WORKING on point " << point_index_);
-        //std::cout << "WORK " << point_index_ << " \t";
+        // all good.
 
         final_state_reached_ = false;
         break;
       case ReflexxesAPI::RML_FINAL_STATE_REACHED:
 
-        //        std::cout << "FINAL " << point_index_ << " \t";
-
         if(!final_state_reached_)
+        {
           ROS_INFO_STREAM_NAMED("temp","RML_FINAL_STATE_REACHED on point " << point_index_);
+        }
         final_state_reached_ = true;
 
         // Pop the active point off the trajectory
         point_index_++;
 
-        recompute_trajectory_ = true;
+        compute_trajectory_point_ = true;
         break;
 
       case ReflexxesAPI::RML_ERROR:
@@ -455,31 +560,93 @@ namespace reflexxes_effort_controllers {
         trajectory_result_.error_code = control_msgs::FollowJointTrajectoryResult::OLD_HEADER_TIMESTAMP;
 
       default:
-        if (loop_count_ % decimation_ == 0) {
-          ROS_ERROR_STREAM_NAMED("update","Reflexxes error code: " << rml_result << ". Setting effort commands to zero.");
-          ROS_ERROR_STREAM_NAMED("update",result_msg);
-        }
-        has_error = true;
+
+        ROS_ERROR_STREAM_NAMED("update","Reflexxes error code: " << rml_result << ". Setting effort commands to zero.");
+        ROS_ERROR_STREAM_NAMED("update",result_msg);
+
         final_state_reached_ = false;
+        return false;
+
         break;
     };
-    
-    // Apply joint commands ------------------------------------------------
-    for(int i=0; i<n_joints_; i++) 
+
+    return true;
+  }
+
+  void JointTrajectoryController::update2(const ros::Time& time, const ros::Duration& period)
+  {
+    updateMulti(time, period);
+
+    // Update the sub-controllers
+    for(size_t i=0; i<n_joints_; i++) 
     {
-      double pos_target = rml_out_->NewPositionVector->VecData[i];
-      double vel_target = rml_out_->NewVelocityVector->VecData[i];
+      position_controllers_[i]->update(time, period);
+    }
+  }
+
+  void JointTrajectoryController::updateMulti(const ros::Time& time, const ros::Duration& period)
+  {
+    // Control how fast we process traj points
+    static size_t counter = 0;
+    counter ++;
+    
+    static const size_t time_gap = 3; // seconds
+    size_t frequency = time_gap / period.toSec();
+
+    // check if we should update the PID controllers this loop
+    if( counter % frequency != 0 )
+      return; // nothing to update yet
+
+    bool has_error = false; // flags the PID controllers not to over write the commanded efforts of zero
+
+    // Read the latest commanded trajectory message
+    const trajectory_msgs::JointTrajectory &commanded_trajectory = *(trajectory_command_buffer_.readFromRT());
+
+    if(new_reference_traj_) 
+    {
+      // Reset point index
+      point_index_ = 0;
+
+      new_reference_traj_ = false;
+    }
+
+    // check if we have processed all the points
+    if( commanded_trajectory.points.size() <= point_index_)
+    {
+      ROS_INFO_STREAM_NAMED("temp","out of points");
+      return;
+    }
+
+    ROS_INFO_STREAM_NAMED("temp","processing point " << point_index_ << " of " << commanded_trajectory.points.size() );
+
+    // Get reference to the active trajectory point
+    const trajectory_msgs::JointTrajectoryPoint &active_traj_point = commanded_trajectory.points[point_index_];
+
+
+    ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
+    for(size_t i=0; i<n_joints_; i++)
+      std::cout << "Joint " << i << " = " << active_traj_point.positions[i] << std::endl;
+
+    ROS_ERROR_STREAM_NAMED("temp","DIFFS --------------------------------------");
+    if(point_index_ > 0)
+      for(size_t i=0; i<n_joints_; i++)
+        std::cout << "Joint " << i << " Diff " << commanded_trajectory.points[point_index_].positions[i]
+                  - commanded_trajectory.points[point_index_-1].positions[i] << std::endl;
+
+    // Apply joint commands ------------------------------------------------
+    for(size_t i=0; i<n_joints_; i++) 
+    {
+      double pos_target = active_traj_point.positions[i];
+      double vel_target = 0; //active_traj_point.velocities[i];
 
       if( !has_error ) // do not over write error commands of 0
-        position_controllers_[i]->setCommand(pos_target, vel_target);
+        position_controllers_[i]->setCommand(pos_target); //, vel_target);
       else
         position_controllers_[i]->setCommand(0, 0);
 
-      // Update the controller
-      position_controllers_[i]->update(time, period);
-
     } // for joints loop
 
+    point_index_ ++;
   }
 
   void JointTrajectoryController::trajectoryActionCommandCB(
@@ -513,53 +680,77 @@ namespace reflexxes_effort_controllers {
     }
   }
 
-    /*
-  void JointTrajectoryController::trajectoryTestCommandCB()
+  void JointTrajectoryController::trajectoryTestCommandCB(const std_msgs::EmptyConstPtr& thing)
   {
     trajectory_msgs::JointTrajectory msg;
 
+    //msg.header.stamp = ros::Time::now();
 
-    msg.header.
-  header: 
-  seq: 0
-      stamp: 
-    secs: 65
-      nsecs: 691000000
-      frame_id: ''
-      goal_id: 
-    stamp: 
-    secs: 65
-      nsecs: 691000000
-      id: /move_group-1-65.691000000
-      goal: 
-    trajectory: 
-    header: 
-    seq: 0
-      stamp: 
-    secs: 0
-      nsecs: 0
-      frame_id: /base
-      joint_names: ['right_e0', 'right_e1', 'right_s0', 'right_s1', 'right_w0', 'right_w1', 'right_w2']
-      points: 
-      - 
-      positions: [-0.00010465668109027604, 0.031050410994437172, -1.0404484585002649e-05, 0.06556338867550338, -0.0010021154586947745, 0.01804246958448985, -5.525417278207101e-05]
-      velocities: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-      accelerations: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-      time_from_start: 
-    secs: 0
-      nsecs: 0
-      - 
-      positions: [0.05286104652745683, 0.0379352831414734, -0.012786901829920542, 0.05876995400033727, 0.021117809612794813, -0.023066806412942058, 0.10387393401780202]
-      velocities: [0.22619108605247856, 0.029401983055693352, -0.05456228531714662, -0.02901149751853807, 0.09446357873546157, -0.1755579784918196, 0.44383165945745756]
-      accelerations: [0.49424873089266885, 0.06424608973154959, -0.11922370922409703, -0.06339284222061026, 0.2064117765222163, -0.3836106434695352, 0.969813789947236]
-      time_from_start: 
-    secs: 0
-      nsecs: 323929188
+    msg.joint_names.push_back(std::string("right_e0"));
+    msg.joint_names.push_back(std::string("right_e1"));
+    msg.joint_names.push_back(std::string("right_s0"));
+    msg.joint_names.push_back(std::string("right_s1"));
+    msg.joint_names.push_back(std::string("right_w0"));
+    msg.joint_names.push_back(std::string("right_w1"));
+    msg.joint_names.push_back(std::string("right_w2"));
 
+    trajectory_msgs::JointTrajectoryPoint point;
+    point.positions.resize(7);
+
+    double time_from_start = 0;
+
+    // point
+    static const double a_positions1[] = {-0.00010465668109027604, 0.031050410994437172, -1.0404484585002649e-05, 0.06556338867550338, -0.0010021154586947745, 0.01804246958448985, -5.525417278207101e-05};    
+    std::vector<double> v_positions1 (a_positions1, a_positions1 + sizeof(a_positions1) / sizeof(a_positions1[0]) );
+    point.positions = v_positions1;
+    point.velocities.resize(7);
+    point.accelerations.resize(7);
+    point.time_from_start = ros::Duration(time_from_start += 10.0);
+    msg.points.push_back(point);
+  
+    // point
+    static const double a_positions2[] = {0.05286104652745683, 0.0379352831414734, -0.012786901829920542, 0.05876995400033727, 0.021117809612794813, -0.023066806412942058, 0.10387393401780202};
+    std::vector<double> v_positions2 (a_positions2, a_positions2 + sizeof(a_positions2) / sizeof(a_positions2[0]) );
+    point.positions = v_positions2;
+    static const double a_velocities2[] = {0.22619108605247856, 0.029401983055693352, -0.05456228531714662, -0.02901149751853807, 0.09446357873546157, -0.1755579784918196, 0.44383165945745756};
+    std::vector<double> v_velocities2 (a_velocities2, a_velocities2 + sizeof(a_velocities2) / sizeof(a_velocities2[0]) );
+    point.velocities = v_velocities2;
+    static const double a_accelerations2[] = {0.49424873089266885, 0.06424608973154959, -0.11922370922409703, -0.06339284222061026, 0.2064117765222163, -0.3836106434695352, 0.969813789947236};
+    std::vector<double> v_accelerations2 (a_accelerations2, a_accelerations2 + sizeof(a_accelerations2) / sizeof(a_accelerations2[0]) );
+    point.accelerations = v_accelerations2;
+    point.time_from_start = ros::Duration(time_from_start += 10.0);
+    msg.points.push_back(point);
+
+    // point
+    static const double a_positions3[] = {0.10582674973600394, 0.04482015528850963, -0.02556339917525608, 0.05197651932517117, 0.0432377346842844, -0.06417608241037397, 0.20780312220838612};
+    std::vector<double> v_positions3 (a_positions3, a_positions3 + sizeof(a_positions3) / sizeof(a_positions3[0]) );
+    point.positions = v_positions3;
+    static const double a_velocities3[] = {0.32933654800224255, 0.0428095897719678, -0.07944324867556203, -0.042241038813148474, 0.1375399423364414, -0.2556142225575305, 0.6462234616350577};
+    std::vector<double> v_velocities3 (a_velocities3, a_velocities3 + sizeof(a_velocities3) / sizeof(a_velocities3[0]) );
+    point.velocities = v_velocities3;
+    static const double a_accelerations3[] = {0.4956135904600064, 0.06442350422905523, -0.11955294349424676, -0.0635679004894484, 0.20698177917551286, -0.38466997781709344, 0.9724919144360015};
+    std::vector<double> v_accelerations3 (a_accelerations3, a_accelerations3 + sizeof(a_accelerations3) / sizeof(a_accelerations3[0]) );
+    point.accelerations = v_accelerations3;
+    point.time_from_start = ros::Duration(time_from_start += 10.0);
+    msg.points.push_back(point);
+
+    // point
+    static const double a_positions4[] = {0.15879245294455105, 0.051705027435545864, -0.03833989652059162, 0.04518308465000506, 0.06535765975577398, -0.10528535840780587, 0.3117323103989702};
+    std::vector<double> v_positions4 (a_positions4, a_positions4 + sizeof(a_positions4) / sizeof(a_positions4[0]) );
+    point.positions = v_positions4;
+    static const double a_velocities4[] = {0.4000616766712626, 0.05200296282229126, -0.09650371165346944, -0.05131231536382344, 0.167076688798022, -0.3105074583361778, 0.7850001560235828};
+    std::vector<double> v_velocities4 (a_velocities4, a_velocities4 + sizeof(a_velocities4) / sizeof(a_velocities4[0]) );
+    point.velocities = v_velocities4;
+    static const double a_accelerations4[] = {0.4545149583733463, 0.05908120137657295, -0.10963904578416486, -0.05829654836144768, 0.18981786729997147, -0.3527713168493544, 0.8918482675142966};
+    std::vector<double> v_accelerations4 (a_accelerations4, a_accelerations4 + sizeof(a_accelerations4) / sizeof(a_accelerations4[0]) );
+    point.accelerations = v_accelerations4;
+    point.time_from_start = ros::Duration(time_from_start += 10.0);
+    msg.points.push_back(point);
+
+    ROS_INFO_STREAM_NAMED("temp","msg: " << msg);
 
     this->setTrajectoryCommand(msg, false);
   }
-    */
 
 
   void JointTrajectoryController::trajectoryMsgCommandCB(
@@ -576,7 +767,7 @@ namespace reflexxes_effort_controllers {
     //  * no non-rt thread is calling the same function (we're not subscribing to ros callbacks)
     //  * there is only one single rt thread
     trajectory_command_buffer_.writeFromNonRT(traj_msg);
-    new_reference_ = true;
+    new_reference_traj_ = true;
   }
 
 
