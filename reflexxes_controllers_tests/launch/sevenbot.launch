@@ -1,0 +1,106 @@
+<launch>
+<!--
+
+rostopic pub -1 /sevenbot/joint_traj_controller/trajectory_command trajectory_msgs/JointTrajectory "header:
+  seq: 0
+  stamp:
+    secs: 0
+    nsecs: 0
+  frame_id: ''
+joint_names: ['j1','j2','j3','j4',j5','j6','j7']
+points:
+- positions: [0,0,0,1.0,0,-1.0,0]
+  velocities: [0,0,0,0,0,0,0]
+  accelerations: [0,0,0,0,0,0,0]
+  time_from_start:
+    secs: 0
+    nsecs: 0" 
+
+-->
+
+  <!-- Launch gazebo with custom world -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <!--arg name="world_name" value=""/-->
+    <arg name="debug" value="false" />
+    <arg name="gui" value="true" />
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="headless" value="false"/>
+  </include>
+
+    <param name="robot_description"
+      command="$(find xacro)/xacro.py '$(find reflexxes_controllers_tests)/model/sevenbot.urdf.xacro'" />
+
+  <group ns="sevenbot">
+
+    <!-- Load the URDF into the ROS Parameter Server -->
+    <param name="robot_description"
+      command="$(find xacro)/xacro.py '$(find reflexxes_controllers_tests)/model/sevenbot.urdf.xacro'" />
+
+    <!-- Call a python script to the run a service call to gazebo_ros to spawn a URDF robot -->
+    <node name="urdf_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false" output="screen"
+      args="-urdf -model sevenbot -param robot_description"/>
+
+    <!-- Create a state publisher to broadcast TF frames -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/>
+
+    <!-- Load and start controllers by default -->
+    <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false"
+      output="screen" ns="/sevenbot" 
+      args="--namespace=/sevenbot
+      joint_state_controller
+      joint_traj_controller
+      "/>
+
+    <!-- Load controller parameters -->
+    <rosparam>
+      # Joint state publisher
+      joint_state_controller:
+        type: joint_state_controller/JointStateController
+        publish_rate: 50
+
+      # Joint trajectory controller
+      joint_traj_controller:
+        type: reflexxes_effort_controllers/JointTrajectoryController
+        sampling_resolution: 0.001
+        joint_names: 
+          - 'j1'
+          - 'j2'
+          - 'j3'
+          - 'j4'
+          - 'j5'
+          - 'j6'
+          - 'j7'
+        joints:
+          j1:
+            pid: {p: 10.0, i: 0.0, d: 20.0}
+            position_tolerance: 0.1
+            max_acceleration: 1.0
+          j2:
+            pid: {p: 10.0, i: 0.0, d: 20.0}
+            position_tolerance: 0.1
+            max_acceleration: 1.0
+          j3:
+            pid: {p: 10.0, i: 0.0, d: 20.0}
+            position_tolerance: 0.1
+            max_acceleration: 1.0
+          j4:
+            pid: {p: 10.0, i: 0.0, d: 20.0}
+            position_tolerance: 0.1
+            max_acceleration: 1.0
+          j5:
+            pid: {p: 10.0, i: 0.0, d: 20.0}
+            position_tolerance: 0.1
+            max_acceleration: 2.0
+          j6:
+            pid: {p: 10.0, i: 0.0, d: 20.0}
+            position_tolerance: 0.1
+            max_acceleration: 2.0
+          j7:
+            pid: {p: 10.0, i: 0.0, d: 20.0}
+            position_tolerance: 0.1
+            max_acceleration: 2.0
+    </rosparam>
+  </group>
+
+</launch>
