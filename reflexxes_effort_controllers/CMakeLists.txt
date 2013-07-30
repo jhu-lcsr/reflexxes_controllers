@@ -17,7 +17,7 @@ find_package(catkin REQUIRED
   reflexxes_type2)
 
 ## System dependencies are found with CMake's conventions
-# find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost REQUIRED COMPONENTS system thread)
 
 
 ## Uncomment this if the package has a setup.py. This macro ensures
@@ -76,7 +76,7 @@ include_directories(include ${catkin_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
 add_library(reflexxes_effort_controllers
   src/joint_trajectory_controller.cpp
   )
-target_link_libraries(reflexxes_effort_controllers ${catkin_LIBRARIES})
+target_link_libraries(reflexxes_effort_controllers ${catkin_LIBRARIES} ${Boost_LIBRARIES})
 
 ## Declare a cpp executable
 # add_executable(reflexxes_effort_controllers_node src/reflexxes_effort_controllers_node.cpp)
