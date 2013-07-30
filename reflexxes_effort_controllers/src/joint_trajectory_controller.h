@@ -120,8 +120,8 @@ namespace reflexxes_effort_controllers
     void starting(const ros::Time& time);
     void stopping(const ros::Time& time);
     void update(const ros::Time& time, const ros::Duration& period);
-    void update2(const ros::Time& time, const ros::Duration& period);
-    void updateMulti(const ros::Time& time, const ros::Duration& period);
+    //    void update2(const ros::Time& time, const ros::Duration& period);
+    //    void updateMulti(const ros::Time& time, const ros::Duration& period);
     
     /**
      * \brief Cacluates a new target for all the joints based on the current trajectory point 
@@ -149,16 +149,12 @@ namespace reflexxes_effort_controllers
 
   private:
     ros::NodeHandle nh_;
-    int loop_count_;
-    int decimation_;
 
     void rml_debug(const ros::console::levels::Level level);
     bool checkRMLValidity();
     bool checkNewTrajectory(const ros::Time& time, const ros::Duration& period,
       const trajectory_msgs::JointTrajectory &commanded_trajectory);
       
-    bool verbose_;
-    
     //! Trajectory Generator
     boost::shared_ptr<ReflexxesAPI> rml_;
     boost::shared_ptr<RMLPositionInputParameters> rml_in_;
@@ -168,10 +164,17 @@ namespace reflexxes_effort_controllers
 
     //! Trajectory parameters
     double sampling_resolution_;
+
+    bool verbose_;
+   
+    // Trajectory Status Flags
     bool new_reference_traj_; // indicate a new trajectory msg is received (master trajectory)
     bool compute_trajectory_point_; // indicate readiness to process next point in trajectory msg OR recompute current one
-    bool final_state_reached_;
+    bool reference_traj_running_; // indicates a trajectory message is running
+    bool is_action_; // indicates if action server is active
+
     double traj_point_execution_time_; // this is MinimumSyncTime - how long to run each sub-trajectory between trajectory msg points
+    size_t update_counter_; // used for throttling the debug output info
 
     // Command subscriber
     ros::Subscriber trajectory_command_sub_;
@@ -201,7 +204,6 @@ namespace reflexxes_effort_controllers
     typedef actionlib::SimpleActionServer<control_msgs::FollowJointTrajectoryAction> FJTAS;
     boost::scoped_ptr<FJTAS> action_server_;
     control_msgs::FollowJointTrajectoryResult trajectory_result_;
-    bool is_action_;
 
     // Create an effort-based joint position controller for every joint
     std::vector< 

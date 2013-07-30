@@ -58,14 +58,13 @@
 namespace reflexxes_effort_controllers {
 
   JointTrajectoryController::JointTrajectoryController()
-    : loop_count_(0),
-      decimation_(10),
-      sampling_resolution_(0.001),
+    : sampling_resolution_(0.001),
       new_reference_traj_(false),
       compute_trajectory_point_(false),
       is_action_(false),
-      final_state_reached_(false),
-      point_index_(0)
+      reference_traj_running_(false),
+      point_index_(0),
+      update_counter_(0)
   {}
 
   JointTrajectoryController::~JointTrajectoryController()
@@ -184,8 +183,7 @@ namespace reflexxes_effort_controllers {
         position_controllers_[i]->init(robot, joint_nh);
 
         // DEBUG
-        position_controllers_[i]->printDebug();
-
+        //position_controllers_[i]->printDebug();
 
         // Get position tolerance
         if (!joint_nh.hasParam("position_tolerance")) {
@@ -274,11 +272,6 @@ namespace reflexxes_effort_controllers {
     initial_command.points.push_back(initial_point);
     trajectory_command_buffer_.initRT(initial_command);
     new_reference_traj_ = true;
-
-    ROS_INFO_STREAM_NAMED("temp","STARTING TRAJECTORY CONTROLLERS ----------------------------");
-
-    const std_msgs::EmptyConstPtr thing;
-    trajectoryTestCommandCB(thing);
   }
 
   void JointTrajectoryController::stopping(const ros::Time& time)
@@ -289,15 +282,19 @@ namespace reflexxes_effort_controllers {
   void JointTrajectoryController::update(const ros::Time& time, const ros::Duration& period)
   {
     // Debug info
-    static size_t counter = 0;
     verbose_ = false;
-    counter ++;
-    if( counter % 100 == 0 )
+    update_counter_ ++;
+    if( update_counter_ % 100 == 0 )
       verbose_ = true;
 
-    // Head start for developer
-    if( counter < 1000 )
-      return;
+    // debug temp
+    if( update_counter_ == 8 / period.toSec() ) // wait 10 seconds
+    {
+      ROS_INFO_STREAM_NAMED("temp","STARTING TRAJECTORY CONTROLLERS ----------------------------");
+
+      const std_msgs::EmptyConstPtr thing;
+      trajectoryTestCommandCB(thing);
+    }
 
     // Check if there is a new trajectory to update
     bool success = updateTrajectory(time,period);
@@ -317,6 +314,10 @@ namespace reflexxes_effort_controllers {
 
         // Freeze the controllers at current position and 0 velocity
         position_controllers_[i]->setCommand(joints_[i].getPosition(), 0.0);          
+
+        // Cancel the current trajectory
+        reference_traj_running_ = false;
+        compute_trajectory_point_ = false;
       }
 
       // Update the individual joint controllers
@@ -361,14 +362,19 @@ namespace reflexxes_effort_controllers {
       commanded_start_time_ = commanded_trajectory.header.stamp;
     }
 
+    ROS_INFO_STREAM_NAMED("temp","here" << commanded_trajectory);
+
     // Run tests on the trajectory points
     for (std::size_t i = 1; i < commanded_trajectory.points.size(); ++i)
     {
       // Test that all trajectory points have increasing time stamps
       if( commanded_trajectory.points[i].time_from_start <= commanded_trajectory.points[i-1].time_from_start )
       {
-        ROS_FATAL_STREAM_NAMED("checkNewTrajectory","Trajectory point " << i 
-          << " does not have an increaseing time_from_start value from point " << i-1);
+        ROS_FATAL_STREAM_NAMED("checkNewTrajectory","Trajectory point " << i << " (" 
+          << commanded_trajectory.points[i].time_from_start << ")"
+          << " does not have an increaseing time_from_start value from point " << i-1 << " ("
+          << commanded_trajectory.points[i-1].time_from_start << ")"
+        );
         new_reference_traj_ = false;
         return false;        
       }      
@@ -399,31 +405,36 @@ namespace reflexxes_effort_controllers {
 
         // Set this new trajectory as old
         new_reference_traj_ = false;
+
+        // Set this new trajectory as being processed
+        reference_traj_running_ = true;
       }
     }
 
-    // Check if there are more points in the trajectory to process
-    //    bool trajectory_incomplete = true; //point_index_ < commanded_trajectory.points.size();
-    
+    // Check if final state is reached. If so, we don't use reflexxes and we assume velocity was already set to zero
+    if( !reference_traj_running_ )
+    {
+      return true;
+    }
+
     // Initialize RML return value
     int rml_result = 0;
+
+    // Get reference to the active trajectory point
+    const trajectory_msgs::JointTrajectoryPoint &active_traj_point = commanded_trajectory.points[point_index_];
 
     // Compute RML trajectory if there are still points in the queue and we finished the last one
     if(compute_trajectory_point_) //&& trajectory_incomplete) 
     {
-      ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
+      ROS_WARN_STREAM_NAMED("temp","----1------------------------------------------------------------");
       ROS_WARN_STREAM_NAMED("temp","Computing sub-trajectory, on point " << point_index_ << " of " 
         << commanded_trajectory.points.size() );
       ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
-
-      // Get reference to the active trajectory point
-      const trajectory_msgs::JointTrajectoryPoint &active_traj_point = commanded_trajectory.points[point_index_];
 
       std::cout << "Trajectory point: \n";
       for(size_t i=0; i<n_joints_; i++)
         std::cout << "Joint " << i << " Position: " << active_traj_point.positions[i] << std::endl;
       ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
-
 
       //ROS_INFO_STREAM_NAMED("temp","point: \n" << active_traj_point);
 
@@ -444,15 +455,15 @@ namespace reflexxes_effort_controllers {
       traj_point_execution_time_ = (active_traj_point.time_from_start - (traj_point_start_time_ - commanded_start_time_)).toSec();
 
       ROS_DEBUG_STREAM("RML IN: MinimumSynchronizatonTime: " << traj_point_execution_time_
-        << "\n Traj point time_from_start: " << active_traj_point.time_from_start.toSec()  // the delay until starting this point
-        << "\n traj_point_start_time_ (now): " << traj_point_start_time_.toSec()   // now
-        << "\n commanded_start_time_: " << commanded_start_time_.toSec() ); // start time of the whole trajectory msg
+        << "\n Trajectory point time_from_start (duration): " << active_traj_point.time_from_start.toSec()  // the delay until starting this point
+        << "\n Trajectory point start_time_ (now): " << traj_point_start_time_.toSec()   // now
+        << "\n Trajectory msg start_time_: " << commanded_start_time_.toSec() ); // start time of the whole trajectory msg
 
       if( traj_point_execution_time_ < 0 )
       {
         ROS_ERROR_STREAM_NAMED("update","Minimum synchronization time was calculated to be less than zero: " << traj_point_execution_time_ );        
 
-        traj_point_execution_time_ = 0.0;
+        traj_point_execution_time_ = 0.1;
       }
       rml_in_->SetMinimumSynchronizationTime(traj_point_execution_time_);
                 
@@ -474,18 +485,24 @@ namespace reflexxes_effort_controllers {
     } 
     else  // We are still working on a previous trajectory point plan
     {
-      
-      if( verbose_ )
-        ROS_DEBUG_STREAM_NAMED("precomputed", "Sample: "
-          << " compute_trajectory_point_="<<compute_trajectory_point_
-          //          << " trajectory_incomplete="<<trajectory_incomplete
-          << " Sample time = " << (time - traj_point_start_time_).toSec() );
 
+      const static double EXECUTION_TOLERANCE = 0.01;
+      double remaining_time_to_next_pt = (time - traj_point_start_time_).toSec();
+
+      if( verbose_ )
+        ROS_DEBUG_STREAM_NAMED("precomputed", "Sample: " << " compute_trajectory_point_="
+          << compute_trajectory_point_ << " Sample time = " << remaining_time_to_next_pt );
+          
       // Error check that we haven't gone over time limit of this sub-trajectory
-      if( (time - traj_point_start_time_).toSec() > traj_point_execution_time_ )
+
+      if( remaining_time_to_next_pt > traj_point_execution_time_ + EXECUTION_TOLERANCE 
+        && reference_traj_running_ )
       {
-        if( verbose_ )
-          ROS_ERROR_STREAM_NAMED("temp","gone over time limit of this sub-trajectory");
+        ROS_ERROR_STREAM_NAMED("update","Failed to reach trajectory point within time limits, aborting.");
+        ROS_DEBUG_STREAM_NAMED("precomputed", "Sample: " << " compute_trajectory_point_="
+          << compute_trajectory_point_ << " Remaining time = " << remaining_time_to_next_pt );
+
+        return false;
       }
 
       // Have Reflexxes Sample the already computed trajectory
@@ -518,15 +535,14 @@ namespace reflexxes_effort_controllers {
       case ReflexxesAPI::RML_WORKING:
         // all good.
 
-        final_state_reached_ = false;
         break;
       case ReflexxesAPI::RML_FINAL_STATE_REACHED:
 
-        if(!final_state_reached_)
+        // Show this message until entire trajectory message is proccessed
+        if(reference_traj_running_)
         {
           ROS_INFO_STREAM_NAMED("temp","RML_FINAL_STATE_REACHED on point " << point_index_);
         }
-        final_state_reached_ = true;
 
         // Pop the active point off the trajectory if there are more points
         if( point_index_ + 1 < commanded_trajectory.points.size() )
@@ -536,11 +552,33 @@ namespace reflexxes_effort_controllers {
         }
         else // we have finished an entire trajectory msg
         {
-          ROS_INFO_STREAM_NAMED("temp","Finished entire trajectory msg - tell action server we're done");
+          // this is the first time we have finished the entire trajectory msg
+          if( reference_traj_running_ )
+          {
+            ROS_INFO_STREAM_NAMED("temp","Finished entire trajectory msg - tell action server we're done");
 
-          // \todo end action
+            if( is_action_ )
+            {
+              // \todo end action
+            }
+
+            // Mark this trajectory message as fully completed
+            reference_traj_running_ = false;
+
+            // Turn off the velocity of all controllers
+            for(size_t i=0; i<n_joints_; i++) 
+            {
+              double pos_target = active_traj_point.positions[i];
+
+              position_controllers_[i]->setCommand(pos_target, 0);
+            }
+          }
+
+          // turn off recomputation
           compute_trajectory_point_ = false;
+
         }       
+
         break;
 
       case ReflexxesAPI::RML_ERROR:
@@ -584,7 +622,7 @@ namespace reflexxes_effort_controllers {
         ROS_ERROR_STREAM_NAMED("update","Reflexxes error code: " << rml_result << ". Setting effort commands to zero.");
         ROS_ERROR_STREAM_NAMED("update",result_msg);
 
-        final_state_reached_ = false;
+        reference_traj_running_ = false;
         return false;
 
         break;
@@ -593,6 +631,7 @@ namespace reflexxes_effort_controllers {
     return true;
   }
 
+/*
   void JointTrajectoryController::update2(const ros::Time& time, const ros::Duration& period)
   {
     updateMulti(time, period);
@@ -668,6 +707,7 @@ namespace reflexxes_effort_controllers {
 
     point_index_ ++;
   }
+*/
 
   void JointTrajectoryController::trajectoryActionCommandCB(
     const control_msgs::FollowJointTrajectoryGoalConstPtr& goal)
@@ -718,6 +758,7 @@ namespace reflexxes_effort_controllers {
     point.positions.resize(7);
 
     double time_from_start = 0;
+    const double time_step = 10;
 
     // point
     static const double a_positions1[] = {-0.00010465668109027604, 0.031050410994437172, -1.0404484585002649e-05, 0.06556338867550338, -0.0010021154586947745, 0.01804246958448985, -5.525417278207101e-05};    
@@ -725,7 +766,7 @@ namespace reflexxes_effort_controllers {
     point.positions = v_positions1;
     point.velocities.resize(7);
     point.accelerations.resize(7);
-    point.time_from_start = ros::Duration(time_from_start += 4.0);
+    point.time_from_start = ros::Duration(time_from_start += time_step);
     msg.points.push_back(point);
   
     // point
@@ -738,7 +779,7 @@ namespace reflexxes_effort_controllers {
     static const double a_accelerations2[] = {0.49424873089266885, 0.06424608973154959, -0.11922370922409703, -0.06339284222061026, 0.2064117765222163, -0.3836106434695352, 0.969813789947236};
     std::vector<double> v_accelerations2 (a_accelerations2, a_accelerations2 + sizeof(a_accelerations2) / sizeof(a_accelerations2[0]) );
     point.accelerations = v_accelerations2;
-    point.time_from_start = ros::Duration(time_from_start += 4.0);
+    point.time_from_start = ros::Duration(time_from_start += time_step);
     msg.points.push_back(point);
 
     // point
@@ -751,7 +792,7 @@ namespace reflexxes_effort_controllers {
     static const double a_accelerations3[] = {0.4956135904600064, 0.06442350422905523, -0.11955294349424676, -0.0635679004894484, 0.20698177917551286, -0.38466997781709344, 0.9724919144360015};
     std::vector<double> v_accelerations3 (a_accelerations3, a_accelerations3 + sizeof(a_accelerations3) / sizeof(a_accelerations3[0]) );
     point.accelerations = v_accelerations3;
-    point.time_from_start = ros::Duration(time_from_start += 4.0);
+    point.time_from_start = ros::Duration(time_from_start += time_step);
     msg.points.push_back(point);
 
     // point
@@ -764,7 +805,7 @@ namespace reflexxes_effort_controllers {
     static const double a_accelerations4[] = {0.4545149583733463, 0.05908120137657295, -0.10963904578416486, -0.05829654836144768, 0.18981786729997147, -0.3527713168493544, 0.8918482675142966};
     std::vector<double> v_accelerations4 (a_accelerations4, a_accelerations4 + sizeof(a_accelerations4) / sizeof(a_accelerations4[0]) );
     point.accelerations = v_accelerations4;
-    point.time_from_start = ros::Duration(time_from_start += 4.0);
+    point.time_from_start = ros::Duration(time_from_start += time_step);
     msg.points.push_back(point);
 
     ROS_INFO_STREAM_NAMED("temp","msg: " << msg);
@@ -787,11 +828,13 @@ namespace reflexxes_effort_controllers {
     trajectory_msgs::JointTrajectory nonconst_traj_msg;
     nonconst_traj_msg = traj_msg;    
 
-    // Slow down the trajectory
-    for (std::size_t i = 1; i < nonconst_traj_msg.points.size(); ++i)
+    // Slow down the trajectory from moveit
+    /*
+    for (std::size_t i = 0; i < nonconst_traj_msg.points.size(); ++i)
     {
       nonconst_traj_msg.points[i].time_from_start = ros::Duration(i*2);
     }
+    */
 
     // the writeFromNonRT can be used in RT, if you have the guarantee that 
     //  * no non-rt thread is calling the same function (we're not subscribing to ros callbacks)
