@@ -501,15 +501,12 @@ namespace reflexxes_effort_controllers {
       {
         compute_trajectory_point_ = true;
 
-        /*
-        if(!verbose_)
-          break;
-        */
+        ROS_WARN_STREAM_NAMED("update","TOLERANCE: " << joint_names_[i] << " target: " 
+          << rml_out_->NewPositionVector->VecData[i] 
+          << " actual: " << joints_[i].getPosition() << " tolerance limit: " 
+          << position_tolerances_[i] );                  
 
-          ROS_WARN_STREAM_NAMED("update","TOLERANCE: " << joint_names_[i] << " target: " 
-            << rml_out_->NewPositionVector->VecData[i] 
-            << " actual: " << joints_[i].getPosition() << " tolerance limit: " 
-            << position_tolerances_[i] );                  
+        break;        
       }
     }
 
@@ -535,13 +532,15 @@ namespace reflexxes_effort_controllers {
         if( point_index_ + 1 < commanded_trajectory.points.size() )
         {          
           point_index_++;
+          compute_trajectory_point_ = true;
         }
         else // we have finished an entire trajectory msg
         {
           ROS_INFO_STREAM_NAMED("temp","Finished entire trajectory msg - tell action server we're done");
-        }
-        
-        compute_trajectory_point_ = true;
+
+          // \todo end action
+          compute_trajectory_point_ = false;
+        }       
         break;
 
       case ReflexxesAPI::RML_ERROR:
