@@ -405,8 +405,9 @@ namespace reflexxes_effort_controllers {
         break;
       case ReflexxesAPI::RML_FINAL_STATE_REACHED:
         // Pop the active point off the trajectory
-        ROS_DEBUG("Final state reached.");
-        point_index_++;
+        if(trajectory_incomplete) {
+          point_index_++;
+        }
         recompute_trajectory_ = true;
         break;
       default:

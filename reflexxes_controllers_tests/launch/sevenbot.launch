@@ -73,31 +73,31 @@ points:
           - 'j7'
         joints:
           j1:
-            pid: {p: 10.0, i: 0.0, d: 20.0}
+            pid: {p: 20.0, i: 0.0, d: 50.0}
             position_tolerance: 0.1
             max_acceleration: 1.0
           j2:
-            pid: {p: 10.0, i: 0.0, d: 20.0}
+            pid: {p: 20.0, i: 0.0, d: 50.0}
             position_tolerance: 0.1
             max_acceleration: 1.0
           j3:
-            pid: {p: 10.0, i: 0.0, d: 20.0}
+            pid: {p: 20.0, i: 0.0, d: 50.0}
             position_tolerance: 0.1
             max_acceleration: 1.0
           j4:
-            pid: {p: 10.0, i: 0.0, d: 20.0}
+            pid: {p: 20.0, i: 0.0, d: 50.0}
             position_tolerance: 0.1
             max_acceleration: 1.0
           j5:
-            pid: {p: 10.0, i: 0.0, d: 20.0}
+            pid: {p: 20.0, i: 0.0, d: 50.0}
             position_tolerance: 0.1
             max_acceleration: 2.0
           j6:
-            pid: {p: 10.0, i: 0.0, d: 20.0}
+            pid: {p: 20.0, i: 0.0, d: 50.0}
             position_tolerance: 0.1
             max_acceleration: 2.0
           j7:
-            pid: {p: 10.0, i: 0.0, d: 20.0}
+            pid: {p: 20.0, i: 0.0, d: 50.0}
             position_tolerance: 0.1
             max_acceleration: 2.0
     </rosparam>
