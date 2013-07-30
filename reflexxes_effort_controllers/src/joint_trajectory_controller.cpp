@@ -287,6 +287,7 @@ namespace reflexxes_effort_controllers {
     for(int i=0; i<n_joints_; i++) {
       if(std::abs(rml_out_->NewPositionVector->VecData[i] - joints_[i].getPosition()) > position_tolerances_[i]) {
         recompute_trajectory_ = true;
+        ROS_WARN("Disturbance outside of tolerance!");
       }
     }
 
@@ -404,29 +405,33 @@ namespace reflexxes_effort_controllers {
     for(int i=0; i<n_joints_; i++) {
       // Set the command
       joints_[i].setCommand(commanded_efforts_[i]);
+    }
 
-      // publish state
-      /**
-      if (loop_count_ % decimation_ == 0) {
-        if(controller_state_publisher_ && controller_state_publisher_->trylock()) {
-          controller_state_publisher_->msg_.header.stamp = time;
-          controller_state_publisher_->msg_.set_point = pos_target;
-          controller_state_publisher_->msg_.process_value = pos_actual;
-          controller_state_publisher_->msg_.process_value_dot = vel_actual;
-          controller_state_publisher_->msg_.error = pos_error;
-          controller_state_publisher_->msg_.time_step = period.toSec();
-          controller_state_publisher_->msg_.command = commanded_effort;
+    // Publish state
+    if (loop_count_ % decimation_ == 0) {
+      for(int i=0; i<n_joints_; i++) {
+        boost::scoped_ptr<realtime_tools::RealtimePublisher<controllers_msgs::JointControllerState> > 
+          state_pub = controllers_tate_publishers_[i];
+
+        if(state_pub && state_pub->trylock()) {
+          state_pub->msg_.header.stamp = time;
+          state_pub->msg_.set_point = pos_target;
+          state_pub->msg_.process_value = pos_actual;
+          state_pub->msg_.process_value_dot = vel_actual;
+          state_pub->msg_.error = pos_error;
+          state_pub->msg_.time_step = period.toSec();
+          state_pub->msg_.command = commanded_effort;
 
           double dummy;
           pids_[i].getGains(
-              controller_state_publisher_->msg_.p,
-              controller_state_publisher_->msg_.i,
-              controller_state_publisher_->msg_.d,
-              controller_state_publisher_->msg_.i_clamp,
+              state_pub->msg_.p,
+              state_pub->msg_.i,
+              state_pub->msg_.d,
+              state_pub->msg_.i_clamp,
               dummy);
-          controller_state_publisher_->unlockAndPublish();
+          state_pub->unlockAndPublish();
         }
-      }**/
+      }
     }
 
     // Increment the loop count
