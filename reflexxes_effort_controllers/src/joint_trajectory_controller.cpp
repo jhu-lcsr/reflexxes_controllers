@@ -252,7 +252,12 @@ namespace reflexxes_effort_controllers {
     initial_point.time_from_start = ros::Duration(1.0);
     initial_command.points.push_back(initial_point);
     trajectory_command_buffer_.initRT(initial_command);
-    pid_controller_.reset();
+
+    // Reset PID controllers
+    for(int i=0; i<n_joints_; i++) {
+      pids_[i]->reset();
+    }
+
     new_reference_ = true;
   }
 
@@ -409,10 +414,11 @@ namespace reflexxes_effort_controllers {
 
     // Publish state
     if (loop_count_ % decimation_ == 0) {
-      for(int i=0; i<n_joints_; i++) {
-        boost::scoped_ptr<realtime_tools::RealtimePublisher<controllers_msgs::JointControllerState> > 
-          state_pub = controllers_tate_publishers_[i];
+    /**
+      boost::scoped_ptr<realtime_tools::RealtimePublisher<controllers_msgs::JointControllerState> > 
+        &state_pub = controller_state_publisher_;
 
+      for(int i=0; i<n_joints_; i++) {
         if(state_pub && state_pub->trylock()) {
           state_pub->msg_.header.stamp = time;
           state_pub->msg_.set_point = pos_target;
@@ -432,6 +438,7 @@ namespace reflexxes_effort_controllers {
           state_pub->unlockAndPublish();
         }
       }
+      **/
     }
 
     // Increment the loop count
