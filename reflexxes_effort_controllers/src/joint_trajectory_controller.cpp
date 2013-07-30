@@ -63,7 +63,8 @@ namespace reflexxes_effort_controllers {
       sampling_resolution_(0.001),
       new_reference_(false),
       recompute_trajectory_(false),
-      is_action_(false)
+      is_action_(false),
+      final_state_reached_(false)
   {}
 
   JointTrajectoryController::~JointTrajectoryController()
@@ -145,14 +146,12 @@ namespace reflexxes_effort_controllers {
 
     // Get individual joint properties from urdf and parameter server
     joint_names_.resize(n_joints_);
-    pids_.resize(n_joints_);
     joints_.resize(n_joints_);
     urdf_joints_.resize(n_joints_);
     position_tolerances_.resize(n_joints_);
     max_accelerations_.resize(n_joints_);
     max_jerks_.resize(n_joints_);
-    commanded_efforts_.resize(n_joints_);
-    controller_state_publishers_.resize(n_joints_);
+    position_controllers_.resize(n_joints_);
 
     for(int i=0; i<n_joints_; i++) 
     {
@@ -168,13 +167,8 @@ namespace reflexxes_effort_controllers {
         ros::NodeHandle joint_nh(nh_, "joints/"+joint_names_[i]);
         ROS_INFO("Loading joint information for joint '%s' (namespace: %s)", joint_names_[i].c_str(), joint_nh.getNamespace().c_str());
 
-        // Initialize PID from rosparam
-        pids_[i].reset(new control_toolbox::Pid());
-        if (!pids_[i]->init(ros::NodeHandle(joint_nh, "pid"))) 
-        {
-          ROS_WARN_STREAM_NAMED("jtc","Failed to initialize PID from rosparam");
-          return false;
-        }
+        position_controllers_[i].reset(new effort_controllers::JointPositionController());
+        position_controllers_[i]->init(robot, joint_nh);
 
         // Get position tolerance
         if (!joint_nh.hasParam("position_tolerance")) {
@@ -197,10 +191,7 @@ namespace reflexxes_effort_controllers {
         }
         joint_nh.param("max_jerk", max_jerks_[i], 1000.0);
 
-        // Initialize the controller state msg for each joint
-        controller_state_publishers_[i].reset(
-          new realtime_tools::RealtimePublisher<control_msgs::JointControllerState>(joint_nh, "state", 1));
-      }
+      } // end of joint-namespaces
 
       // Get ros_control joint handle
       joints_[i] = robot->getHandle(joint_names_[i]);
@@ -242,6 +233,7 @@ namespace reflexxes_effort_controllers {
         boost::bind(&JointTrajectoryController::trajectoryActionCommandCB, this, _1), false));
     action_server_->start();
 
+
     return true;
   }
 
@@ -273,6 +265,8 @@ namespace reflexxes_effort_controllers {
       const ros::Time& time, 
       const ros::Duration& period)
   {
+    //ROS_INFO_STREAM_NAMED("temp","Time: " << time << " Period: " << period.toSec() );
+
     // Read the latest commanded trajectory message
     const trajectory_msgs::JointTrajectory &commanded_trajectory = *(trajectory_command_buffer_.readFromRT());
 
@@ -280,6 +274,7 @@ namespace reflexxes_effort_controllers {
     if(new_reference_) {
       // Start trajectory immediately if stamp is zero
       if(commanded_trajectory.header.stamp.isZero()) {
+        ROS_WARN_STREAM_NAMED("temp","set from time=" << time << " period="<<period.toSec() );
         commanded_start_time_ = time + period;
       } else {
         commanded_start_time_ = commanded_trajectory.header.stamp;
@@ -310,7 +305,7 @@ namespace reflexxes_effort_controllers {
             << " which is outside the tolerance of " << position_tolerances_[i] );
           break;
         */
-        std::cout << " BAD ";
+        //std::cout << " BAD ";
         break;
       }
     }
@@ -324,7 +319,11 @@ namespace reflexxes_effort_controllers {
       ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
       ROS_WARN_STREAM_NAMED("temp","----------------------------------------------------------------");
       // Get reference to the active trajectory point
-      const trajectory_msgs::JointTrajectoryPoint &active_traj_point = commanded_trajectory.points[point_index_];
+      const trajectory_msgs::JointTrajectoryPoint &active_traj_point_const = commanded_trajectory.points[point_index_];
+      trajectory_msgs::JointTrajectoryPoint active_traj_point = active_traj_point_const;
+
+      //static double time_from_start_hack = 0;
+      active_traj_point.time_from_start = ros::Duration(point_index_*2);
 
       // Compute the trajectory
       ROS_DEBUG("RML Recomputing trajectory...");
@@ -346,15 +345,16 @@ namespace reflexxes_effort_controllers {
       double min_sync_time = (active_traj_point.time_from_start - (traj_start_time_ - commanded_start_time_)).toSec();
 
       ROS_DEBUG_STREAM("RML IN: MinimumSynchronizatonTime: " << min_sync_time
-        << "\n Traj point time from start: " << active_traj_point.time_from_start 
-        << "\n traj_start_time_: " << traj_start_time_.toSec()
-        << "\n commanded_start_time_: " << commanded_start_time_.toSec()
+        << "\n Traj point time from start: " << active_traj_point.time_from_start.toSec()  // the delay until starting this point
+        << "\n traj_start_time_: " << traj_start_time_.toSec()   // the time at which we send the command to reflexxes
+        << "\n commanded_start_time_: " << commanded_start_time_.toSec() // when to start execution in the future 
       );
 
       if( min_sync_time < 0 )
       {
         ROS_ERROR_STREAM_NAMED("update","Minimum synchronization time was calculated to be less than zero: " << min_sync_time );        
-        min_sync_time = 10;
+
+        min_sync_time = 0.1;
       }
       rml_in_->SetMinimumSynchronizationTime(min_sync_time);
                 
@@ -369,13 +369,8 @@ namespace reflexxes_effort_controllers {
           rml_flags_);
 
       ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
-      ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
-      ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------\n");
       for(int i=0; i<n_joints_; i++)
         std::cout << "Joint " << i << " = " << rml_out_->NewPositionVector->VecData[i] << std::endl;
-
-      ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
-      ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
       ROS_ERROR_STREAM_NAMED("temp","NEW TRAJECTORY --------------------------------------");
       
       // Disable recompute flag
@@ -388,7 +383,7 @@ namespace reflexxes_effort_controllers {
         << " trajectory_incomplete="<<trajectory_incomplete);
       */
 
-      std::cout << " [" << (time - traj_start_time_).toSec() << "s] ";
+      //std::cout << " [" << (time - traj_start_time_).toSec() << "s] ";
 
       // Sample the already computed trajectory
       rml_result = rml_->RMLPositionAtAGivenSampleTime(
@@ -405,13 +400,21 @@ namespace reflexxes_effort_controllers {
       case ReflexxesAPI::RML_WORKING:
         // S'all good.
         //ROS_INFO_STREAM_NAMED("temp","RML_WORKING on point " << point_index_);
-        std::cout << "WORK " << point_index_ << " \t";
+        //std::cout << "WORK " << point_index_ << " \t";
+
+        final_state_reached_ = false;
         break;
       case ReflexxesAPI::RML_FINAL_STATE_REACHED:
+
+        //        std::cout << "FINAL " << point_index_ << " \t";
+
+        if(!final_state_reached_)
+          ROS_INFO_STREAM_NAMED("temp","RML_FINAL_STATE_REACHED on point " << point_index_);
+        final_state_reached_ = true;
+
         // Pop the active point off the trajectory
-        //        ROS_INFO_STREAM_NAMED("temp","RML_FINAL_STATE_REACHED on point " << point_index_);
-        std::cout << "FINAL " << point_index_ << " \t";
         point_index_++;
+
         recompute_trajectory_ = true;
         break;
 
@@ -456,91 +459,27 @@ namespace reflexxes_effort_controllers {
           ROS_ERROR_STREAM_NAMED("update","Reflexxes error code: " << rml_result << ". Setting effort commands to zero.");
           ROS_ERROR_STREAM_NAMED("update",result_msg);
         }
-        commanded_efforts_.assign(n_joints_,0.0);
         has_error = true;
+        final_state_reached_ = false;
         break;
     };
     
-    // Apply joint-PIDs ------------------------------------------------
+    // Apply joint commands ------------------------------------------------
     for(int i=0; i<n_joints_; i++) 
     {
-      // Convenience variables
-      double pos_actual = joints_[i].getPosition(),
-             vel_actual = joints_[i].getVelocity();
-
       double pos_target = rml_out_->NewPositionVector->VecData[i];
       double vel_target = rml_out_->NewVelocityVector->VecData[i];
-      double pos_error;
-      double vel_error;
-      double commanded_effort;
-
-      // Compute position error between the actual and the target state
-      switch(urdf_joints_[i]->type) {
-
-        // Revolute joint with limits
-        case urdf::Joint::REVOLUTE:
-          angles::shortest_angular_distance_with_limits(
-              pos_actual,
-              pos_target, 
-              urdf_joints_[i]->limits->lower, 
-              urdf_joints_[i]->limits->upper,
-              pos_error);
-          break;
-
-        // Continuous joint with no limits
-        case urdf::Joint::CONTINUOUS:
-          pos_error = angles::shortest_angular_distance(
-              pos_actual,
-              pos_target);
-          break;
-
-        // Prismatic joint types
-        default:
-          pos_error = pos_target - pos_actual;
-          break;
-      };
-
-      // Compute velocity error between the actual and the target state
-      vel_error = vel_target - vel_actual;
-
-      // Set the PID error and compute the PID command with nonuniform time step size.
 
       if( !has_error ) // do not over write error commands of 0
-        commanded_efforts_[i] = pids_[i]->computeCommand(pos_error, vel_error, period);
+        position_controllers_[i]->setCommand(pos_target, vel_target);
+      else
+        position_controllers_[i]->setCommand(0, 0);
 
-      // Set the lower-level commands
-      double dummy;
-
-      // Set the command
-      joints_[i].setCommand(commanded_efforts_[i]);
-
-      // publish state
-      if (loop_count_ % 10 == 0)
-      {
-        if(controller_state_publishers_[i] && controller_state_publishers_[i]->trylock())
-        {
-          controller_state_publishers_[i]->msg_.header.stamp = time;
-          controller_state_publishers_[i]->msg_.set_point = pos_target;
-          controller_state_publishers_[i]->msg_.process_value = pos_actual;
-          controller_state_publishers_[i]->msg_.process_value_dot = vel_actual;
-          controller_state_publishers_[i]->msg_.error = pos_error;
-          controller_state_publishers_[i]->msg_.time_step = period.toSec();
-          controller_state_publishers_[i]->msg_.command = commanded_efforts_[i];
-
-          pids_[i]->getGains(
-            controller_state_publishers_[i]->msg_.p,
-            controller_state_publishers_[i]->msg_.i,
-            controller_state_publishers_[i]->msg_.d,
-            controller_state_publishers_[i]->msg_.i_clamp,
-            dummy);
-          controller_state_publishers_[i]->unlockAndPublish();
-        }
-      }
+      // Update the controller
+      position_controllers_[i]->update(time, period);
 
     } // for joints loop
 
-    // Increment the loop count
-    loop_count_++;
   }
 
   void JointTrajectoryController::trajectoryActionCommandCB(
@@ -573,6 +512,55 @@ namespace reflexxes_effort_controllers {
       action_server_->setSucceeded(traj_result, error_msg);
     }
   }
+
+    /*
+  void JointTrajectoryController::trajectoryTestCommandCB()
+  {
+    trajectory_msgs::JointTrajectory msg;
+
+
+    msg.header.
+  header: 
+  seq: 0
+      stamp: 
+    secs: 65
+      nsecs: 691000000
+      frame_id: ''
+      goal_id: 
+    stamp: 
+    secs: 65
+      nsecs: 691000000
+      id: /move_group-1-65.691000000
+      goal: 
+    trajectory: 
+    header: 
+    seq: 0
+      stamp: 
+    secs: 0
+      nsecs: 0
+      frame_id: /base
+      joint_names: ['right_e0', 'right_e1', 'right_s0', 'right_s1', 'right_w0', 'right_w1', 'right_w2']
+      points: 
+      - 
+      positions: [-0.00010465668109027604, 0.031050410994437172, -1.0404484585002649e-05, 0.06556338867550338, -0.0010021154586947745, 0.01804246958448985, -5.525417278207101e-05]
+      velocities: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      accelerations: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      time_from_start: 
+    secs: 0
+      nsecs: 0
+      - 
+      positions: [0.05286104652745683, 0.0379352831414734, -0.012786901829920542, 0.05876995400033727, 0.021117809612794813, -0.023066806412942058, 0.10387393401780202]
+      velocities: [0.22619108605247856, 0.029401983055693352, -0.05456228531714662, -0.02901149751853807, 0.09446357873546157, -0.1755579784918196, 0.44383165945745756]
+      accelerations: [0.49424873089266885, 0.06424608973154959, -0.11922370922409703, -0.06339284222061026, 0.2064117765222163, -0.3836106434695352, 0.969813789947236]
+      time_from_start: 
+    secs: 0
+      nsecs: 323929188
+
+
+    this->setTrajectoryCommand(msg, false);
+  }
+    */
+
 
   void JointTrajectoryController::trajectoryMsgCommandCB(
     const trajectory_msgs::JointTrajectoryConstPtr& msg)

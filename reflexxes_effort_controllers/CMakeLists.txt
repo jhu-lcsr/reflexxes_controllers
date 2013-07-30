@@ -4,7 +4,7 @@ project(reflexxes_effort_controllers)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED 
+find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
   control_toolbox
@@ -12,6 +12,7 @@ find_package(catkin REQUIRED
   trajectory_msgs 
   hardware_interface
   controller_interface 
+  effort_controllers
   realtime_tools
   urdf
   reflexxes_type2)
@@ -60,7 +61,7 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES reflexxes_effort_controllers
-#  CATKIN_DEPENDS other_catkin_pkg
+   CATKIN_DEPENDS effort_controllers
 #  DEPENDS system_lib
 )
 

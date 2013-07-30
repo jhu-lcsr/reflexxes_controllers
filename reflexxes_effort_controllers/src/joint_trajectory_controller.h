@@ -49,8 +49,8 @@
  *
  *********************************************************************/
 
-#ifndef EFFORT_CONTROLLERS_JOINT_POSITION_CONTROLLER_H
-#define EFFORT_CONTROLLERS_JOINT_POSITION_CONTROLLER_H
+#ifndef REFLEXXES_CONTROLLERS__JOINT_TRAJECTORY_CONTROLLER_H
+#define REFLEXXES_CONTROLLERS__JOINT_TRAJECTORY_CONTROLLER_H
 
 /**
   @class reflexxes_effort_controllers::JointTrajectoryController
@@ -100,6 +100,10 @@ Current state of the controller, including pid error and gains.
 #include <RMLPositionInputParameters.h>
 #include <RMLPositionOutputParameters.h>
 
+
+#include <effort_controllers/joint_position_controller.h>
+
+
 namespace reflexxes_effort_controllers
 {
 
@@ -122,11 +126,9 @@ namespace reflexxes_effort_controllers
 
     size_t n_joints_;
     std::vector<std::string> joint_names_;
-    std::vector< boost::shared_ptr<control_toolbox::Pid> > pids_;
     std::vector<double> position_tolerances_;
     std::vector<double> max_accelerations_;
     std::vector<double> max_jerks_;
-    std::vector<double> commanded_efforts_;
     std::vector<hardware_interface::JointHandle> joints_;
     std::vector<boost::shared_ptr<const urdf::Joint> > urdf_joints_;
 
@@ -151,6 +153,7 @@ namespace reflexxes_effort_controllers
     double sampling_resolution_;
     bool new_reference_;
     bool recompute_trajectory_;
+    bool final_state_reached_;
 
     // Command subscriber
     ros::Subscriber trajectory_command_sub_;
@@ -179,11 +182,10 @@ namespace reflexxes_effort_controllers
     control_msgs::FollowJointTrajectoryResult trajectory_result_;
     bool is_action_;
 
-    // Publish controller state msgs
-    std::vector<
+    // Create an effort-based joint position controller for every joint
+    std::vector< 
       boost::shared_ptr<
-        realtime_tools::RealtimePublisher<
-          control_msgs::JointControllerState> > > controller_state_publishers_;
+        effort_controllers::JointPositionController> > position_controllers_;    
 
   };
 
