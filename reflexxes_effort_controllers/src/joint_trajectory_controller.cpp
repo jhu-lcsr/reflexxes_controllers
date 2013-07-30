@@ -242,6 +242,7 @@ namespace reflexxes_effort_controllers {
 
   void JointTrajectoryController::starting(const ros::Time& time) 
   {
+    // Define an initial command point from the current position
     trajectory_msgs::JointTrajectory initial_command;
     trajectory_msgs::JointTrajectoryPoint initial_point;
     for(int i=0; i<n_joints_; i++) {
@@ -253,11 +254,13 @@ namespace reflexxes_effort_controllers {
     initial_command.points.push_back(initial_point);
     trajectory_command_buffer_.initRT(initial_command);
 
-    // Reset PID controllers
+    // Reset PID integrator and effort commands
     for(int i=0; i<n_joints_; i++) {
       pids_[i]->reset();
+      commanded_efforts_[i] = 0.0;
     }
 
+    // Set new reference flag for initial command point
     new_reference_ = true;
   }
 
@@ -272,29 +275,25 @@ namespace reflexxes_effort_controllers {
     if(new_reference_) {
       // Start trajectory immediately if stamp is zero
       if(commanded_trajectory.header.stamp.isZero()) {
-        commanded_start_time_ = time + period;
+        commanded_start_time_ = time;
       } else {
         commanded_start_time_ = commanded_trajectory.header.stamp;
       }
       // Reset point index
       point_index_ = 0;
-      recompute_trajectory_ = true;
+      // Reset new reference flag
       new_reference_ = false;
+      // Set flag to recompute trajectory
+      recompute_trajectory_ = true;
+
+      ROS_DEBUG("Received new reference.");
     }
 
     // Initialize RML result
     int rml_result = 0;
 
-    bool trajectory_running = commanded_start_time_ >= time;
+    bool trajectory_running = commanded_start_time_ <= time + period;
     bool trajectory_incomplete = point_index_ < commanded_trajectory.points.size();
-
-    bool tolerance_violated = false;
-    for(int i=0; i<n_joints_; i++) {
-      if(std::abs(rml_out_->NewPositionVector->VecData[i] - joints_[i].getPosition()) > position_tolerances_[i]) {
-        recompute_trajectory_ = true;
-        ROS_WARN("Disturbance outside of tolerance!");
-      }
-    }
 
     // Compute RML traj after the start time and if there are still points in the queue
     if(recompute_trajectory_ && trajectory_running && trajectory_incomplete) {
@@ -312,6 +311,8 @@ namespace reflexxes_effort_controllers {
 
         rml_in_->TargetPositionVector->VecData[i] = active_traj_point.positions[i];
         rml_in_->TargetVelocityVector->VecData[i] = active_traj_point.velocities[i];
+
+        rml_in_->SelectionVector->VecData[i] = true;
       }
 
       // Store the traj start time
@@ -319,10 +320,10 @@ namespace reflexxes_effort_controllers {
 
       // Set desired execution time for this trajectory (definitely > 0)
       rml_in_->SetMinimumSynchronizationTime(
-          (active_traj_point.time_from_start - (traj_start_time_ - commanded_start_time_)).toSec());
+          std::max(0.0,(active_traj_point.time_from_start - (traj_start_time_ - commanded_start_time_)).toSec()));
 
       ROS_DEBUG_STREAM("RML IN: time: "<<rml_in_->GetMinimumSynchronizationTime());
-      
+
       // Hold fixed at final point once trajectory is complete
       rml_flags_.BehaviorAfterFinalStateOfMotionIsReached = RMLPositionFlags::RECOMPUTE_TRAJECTORY;
       rml_flags_.SynchronizationBehavior = RMLPositionFlags::ONLY_TIME_SYNCHRONIZATION;
@@ -338,10 +339,19 @@ namespace reflexxes_effort_controllers {
     } else {
       // Sample the already computed trajectory
       rml_result = rml_->RMLPositionAtAGivenSampleTime(
-        (time - traj_start_time_).toSec(),
-        rml_out_.get());
+          (time - traj_start_time_).toSec(),
+          rml_out_.get());
     }
-    
+
+    // Determine if any of the joint tolerances have been violated
+    for(int i=0; i<n_joints_; i++) {
+      double tracking_error = std::abs(rml_out_->NewPositionVector->VecData[i] - joints_[i].getPosition());
+      if(tracking_error > position_tolerances_[i]) {
+        recompute_trajectory_ = true;
+        ROS_WARN_STREAM("Tracking for joint "<<i<<" outside of tolerance! ("<<tracking_error<<" > "<<position_tolerances_[i]<<")");
+      }
+    }
+
     // Apply joint-PIDs
     for(int i=0; i<n_joints_; i++) {
       // Convenience variables
@@ -367,14 +377,14 @@ namespace reflexxes_effort_controllers {
               pos_error);
           break;
 
-        // Continuous joint with no limits
+          // Continuous joint with no limits
         case urdf::Joint::CONTINUOUS:
           pos_error = angles::shortest_angular_distance(
               pos_actual,
               pos_target);
           break;
 
-        // Prismatic joint types
+          // Prismatic joint types
         default:
           pos_error = pos_target - pos_actual;
           break;
@@ -395,6 +405,7 @@ namespace reflexxes_effort_controllers {
         break;
       case ReflexxesAPI::RML_FINAL_STATE_REACHED:
         // Pop the active point off the trajectory
+        ROS_DEBUG("Final state reached.");
         point_index_++;
         recompute_trajectory_ = true;
         break;
